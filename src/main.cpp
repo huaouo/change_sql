@@ -2,7 +2,7 @@
 #include "fmt/format.h"
 #include "mysql.h"
 #include <algorithm>
-
+#include "xxh3.h"
 
 struct Config {
     const char *data_path, *dst_ip, *dst_user, *dst_password;
@@ -24,8 +24,11 @@ int main(int argc, char *argv[]) {
     auto cfg = parse_argv(argv);
     uv_loop_t loop;
     uv_loop_init(&loop);
-    MySQLClient client(&loop, cfg.dst_user, cfg.dst_password);
-    client.connect(cfg.dst_ip, cfg.dst_port);
+    MySQLClient *clients[128];
+    for (auto &client: clients) {
+        client = new MySQLClient(&loop, cfg.dst_ip, cfg.dst_port,
+                                 cfg.dst_user, cfg.dst_password);
+    }
     uv_run(&loop, UV_RUN_DEFAULT);
     uv_loop_close(uv_default_loop());
 }
