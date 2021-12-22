@@ -1,27 +1,12 @@
 #include "uv.h"
-#include "fmt/format.h"
-#include "mysql.h"
-#include <algorithm>
 #include "xxh3.h"
-
-struct Config {
-    const char *data_path, *dst_ip, *dst_user, *dst_password;
-    int dst_port;
-};
-
-// change_sql --data_path /tmp/data --dst_ip 127.0.0.1 --dst_port 3306 --dst_user root --dst_password 123456789
-inline Config parse_argv(char *argv[]) {
-    return {
-            .data_path = argv[2],
-            .dst_ip = argv[4],
-            .dst_user = argv[8],
-            .dst_password = argv[10],
-            .dst_port = atoi(argv[6])
-    };
-}
+#include "mysql.h"
+#include "utils.h"
 
 int main(int argc, char *argv[]) {
     auto cfg = parse_argv(argv);
+    auto tasks = extract_table_tasks(cfg.data_path);
+
     uv_loop_t loop;
     uv_loop_init(&loop);
     MySQLClient *clients[128];
@@ -31,4 +16,5 @@ int main(int argc, char *argv[]) {
     }
     uv_run(&loop, UV_RUN_DEFAULT);
     uv_loop_close(uv_default_loop());
+    for (auto c: clients) delete c;
 }

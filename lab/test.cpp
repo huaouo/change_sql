@@ -5,7 +5,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include "flags.h"
-#include <fmt/format.h>
+#include "fmt/format.h"
 
 int main() {
     uint32_t flag = 0x01FFA605;

@@ -11,8 +11,8 @@ set_property(GLOBAL PROPERTY CTEST_TARGETS_ADDED 1)
 add_subdirectory(3rd/fmt)
 add_subdirectory(3rd/libuv)
 
-add_executable(change_sql src/main.cpp src/mysql.cpp)
+add_executable(change_sql src/main.cpp src/mysql.cpp src/utils.cpp)
 target_link_libraries(change_sql fmt uv_a crypto)
 
-add_executable(test src/test.cpp)
-target_link_libraries(test fmt uv_a)
+#add_executable(lab lab/test.cpp)
+#target_link_libraries(lab fmt)

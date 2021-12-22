@@ -101,6 +101,7 @@ void MySQLClient::send_handshake_resp(ConnContext *ctx, char *challenge) {
         sha_password[i] ^= sha_right_part[i];
     }
 
+    // buf := auth_block_1 <concat> username <concat> auth_block_2 <concat> sha_password <concat> auth_block_3
     auto buf = uv_buf_init(new char[256], 0);
     memcpy(buf.base + buf.len, auth_block_1, sizeof(auth_block_1));
     buf.len += sizeof(auth_block_1);
