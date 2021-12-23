@@ -2,6 +2,8 @@
 // Created by huaouo on 2021/12/22.
 //
 
+#include <unordered_map>
+
 #include "utils.h"
 
 // change_sql --data_path /tmp/data --dst_ip 127.0.0.1 --dst_port 3306 --dst_user root --dst_password 123456789
@@ -42,10 +44,32 @@ std::string read_file(const char *path) {
     return file_contents;
 }
 
+uint16_t parse_ddl_key_position(const char *ddl) {
+    uint16_t ret = 0;
+    int pos = 0;
+    std::unordered_map<std::string, int> m;
+
+    // Skip after the first '('
+    while (ddl[pos] != '(') pos++;
+    pos++;
+
+    while (true) {
+        while (ddl[pos] == ' ') pos++;
+        if (ddl[pos] == '`') {
+
+
+        } else {
+            while (ddl[pos] != '(') pos++;
+            pos++;
+        }
+    }
+}
+
 std::vector<TableTask> extract_table_tasks(const char *data_path) {
     std::vector<TableTask> ret;
     auto srcs = list_dir(data_path);
     std::vector<std::string> srcs_path_;
+    srcs_path_.reserve(srcs.size());
     for (auto &src: srcs) srcs_path_.push_back(std::string(data_path) + "/" + src + "/");
     auto dbs = list_dir(srcs_path_[0].c_str());
     for (auto &db: dbs) {

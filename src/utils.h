@@ -31,6 +31,8 @@ std::vector<std::string> list_dir(const char *p);
 
 std::string read_file(const char *path);
 
+uint16_t parse_ddl_key_position(const char *ddl);
+
 std::vector<TableTask> extract_table_tasks(const char *data_path);
 
 

@@ -8,7 +8,6 @@
 #include <openssl/sha.h>
 #include <uv.h>
 #include <string.h>
-#include <fmt/format.h>
 
 class MySQLClient {
 public:

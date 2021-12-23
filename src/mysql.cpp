@@ -3,6 +3,7 @@
 //
 
 #include "mysql.h"
+#include <spdlog/spdlog.h>
 
 MySQLClient::MySQLClient(uv_loop_t *loop, const char *ip, int port, const char *username, const char *password) {
     uv_tcp_init(loop, &ctx.tcp_client);
