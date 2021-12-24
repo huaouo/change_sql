@@ -21,6 +21,7 @@ void MySQLClient::connect(const char *ip, int port) {
     ctx.tcp_client.data = &ctx;
 }
 
+// TODO: buffer pool optimization
 void MySQLClient::alloc_buffer(uv_handle_t *handle, size_t suggested_size, uv_buf_t *buf) {
     buf->base = new char[suggested_size];
     buf->len = suggested_size;

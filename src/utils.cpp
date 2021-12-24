@@ -57,7 +57,6 @@ uint16_t parse_ddl_key_position(const char *ddl) {
         while (ddl[pos] == ' ') pos++;
         if (ddl[pos] == '`') {
 
-
         } else {
             while (ddl[pos] != '(') pos++;
             pos++;
@@ -97,4 +96,54 @@ std::vector<TableTask> extract_table_tasks(const char *data_path) {
         }
     }
     return ret;
+}
+
+std::string normalize_float(const std::string &number_str) {
+    std::string n = number_str;
+    int digit_cnt = 0, i = 0, dot_pos = n.size();
+    bool leading_zero = true;
+    while (digit_cnt < 6 && i < n.size()) {
+        if (n[i] == '0') {
+            if (!leading_zero) digit_cnt++;
+        } else if (isdigit(n[i])) {
+            digit_cnt++;
+            leading_zero = false;
+        } else if (n[i] == '.') dot_pos = i;
+        i++;
+    }
+    if (dot_pos == n.size()) {
+        for (int j = i; j < n.size(); j++) {
+            if (n[j] == '.') {
+                dot_pos = j;
+                break;
+            }
+        }
+    }
+
+    int end = i;
+    bool carry = false;
+    if (i < n.size() && n[i] >= '5' || i + 1 < n.size() && n[i] == '.' && n[i + 1] >= '5') {
+        carry = true;
+        int end_iter = i - 1;
+        while (carry && end_iter >= 0) {
+            if (n[end_iter] == '.') {
+                if (end == end_iter + 1) end--;
+            } else if (n[end_iter] == '9') {
+                if (end_iter > dot_pos) end--;
+                else n[end_iter] = '0';
+            } else {
+                n[end_iter] += 1;
+                carry = false;
+            }
+            end_iter--;
+        }
+    }
+
+    if (end > dot_pos) {
+        n = n.substr(0, end);
+    } else {
+        for (int t = end; t < dot_pos; t++) n[t] = '0';
+        n = n.substr(0, dot_pos);
+    }
+    return carry ? std::string("1") + n : n;
 }

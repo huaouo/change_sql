@@ -10,8 +10,10 @@
 
 #include <string>
 #include <vector>
+#include <limits>
 #include <fstream>
 #include <algorithm>
+#include <spdlog/spdlog.h>
 
 struct Config {
     const char *data_path, *dst_ip, *dst_user, *dst_password;
@@ -35,5 +37,6 @@ uint16_t parse_ddl_key_position(const char *ddl);
 
 std::vector<TableTask> extract_table_tasks(const char *data_path);
 
+std::string normalize_float(const std::string &number_str);
 
 #endif //CHANGE_SQL_UTILS_H

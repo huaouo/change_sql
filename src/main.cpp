@@ -1,14 +1,17 @@
 #include <phmap/phmap.h>
+#include <spdlog/spdlog.h>
 #include "uv.h"
 #include "mysql.h"
 #include "utils.h"
 
 int main(int argc, char *argv[]) {
-    phmap::flat_hash_map<int, int> m;
-    m.reserve(3500000);
-    m[0] = 0;
-    m[1] = 1;
-    getchar();
+    fmt::print("{}\n", normalize_float("0.09999999"));
+
+//    phmap::flat_hash_map<int, int> m;
+//    m.reserve(3500000);
+//    m[0] = 0;
+//    m[1] = 1;
+//    getchar();
 
 //    auto cfg = parse_argv(argv);
 //    auto tasks = extract_table_tasks(cfg.data_path);
