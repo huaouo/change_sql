@@ -3,6 +3,7 @@
 //
 
 #include <unordered_map>
+#include <phmap/phmap.h>
 
 #include "utils.h"
 
@@ -44,7 +45,7 @@ std::string read_file(const char *path) {
     return file_contents;
 }
 
-uint16_t parse_ddl_key_position(const char *ddl) {
+uint16_t parse_ddl(const char *ddl) {
     uint16_t ret = 0;
     int pos = 0;
     std::unordered_map<std::string, int> m;
@@ -53,15 +54,45 @@ uint16_t parse_ddl_key_position(const char *ddl) {
     while (ddl[pos] != '(') pos++;
     pos++;
 
-    while (true) {
+    auto next_token = [&]() -> std::string {
         while (ddl[pos] == ' ') pos++;
-        if (ddl[pos] == '`') {
+        int pos_beg = pos;
+        while (ddl[pos] != ' ') pos++;
+        return {&ddl[pos_beg], &ddl[pos]};
+    };
 
-        } else {
+    auto next_key_token = [&]() -> std::string {
+        while (ddl[pos] == ' ' || ddl[pos] == ',') pos++;
+        int pos_beg = pos;
+        while (ddl[pos] != ' ' && ddl[pos] != ',' && ddl[pos] != ')') pos++;
+        return {&ddl[pos_beg], &ddl[pos]};
+    };
+
+    phmap::flat_hash_map<std::string, int> field_name_to_index;
+    int index = 0;
+    uint16_t unique_mask = 0;
+    while (true) {
+        auto field_name = next_token();
+        if (field_name[0] == '`') { // field definition line
+            auto field_type = next_token(); // not used for now
+            field_name_to_index[field_name] = index;
+            index++;
+        } else { // index line
             while (ddl[pos] != '(') pos++;
             pos++;
+            std::string key;
+            while (true) {
+                key = next_key_token();
+                if (key.empty()) break;
+                unique_mask |= 1 << field_name_to_index[key];
+            }
+            pos++; // skip single ')'
         }
+        while (ddl[pos] != ',' && ddl[pos] != ')') pos++;
+        if (ddl[pos] == ')') break;
+        pos++;
     }
+    return unique_mask;
 }
 
 std::vector<TableTask> extract_table_tasks(const char *data_path) {
@@ -91,7 +122,8 @@ std::vector<TableTask> extract_table_tasks(const char *data_path) {
                     .db = db,
                     .table = table_names[i],
                     .table_ddl = table_ddls[i],
-                    .csvs = csvs
+                    .csvs = csvs,
+                    .key_mask = parse_ddl(table_ddls[i].c_str())
             });
         }
     }
@@ -146,4 +178,19 @@ std::string normalize_float(const std::string &number_str) {
         n = n.substr(0, dot_pos);
     }
     return carry ? std::string("1") + n : n;
+}
+
+std::vector<std::vector<TableTask>> distribute_tasks(const std::vector<TableTask> &tasks, int num_cores) {
+    auto ret = std::vector<std::vector<TableTask>>(num_cores, std::vector<TableTask>());
+    for (int task_id = 0; task_id < tasks.size(); task_id++) {
+        ret[task_id % num_cores].push_back(tasks[task_id]);
+    }
+    return ret;
+}
+
+void set_thread_affinity(int i) {
+    cpu_set_t cpuset;
+    CPU_ZERO(&cpuset);
+    CPU_SET(i, &cpuset);
+    pthread_setaffinity_np(pthread_self(), sizeof(cpu_set_t), &cpuset);
 }

@@ -5,10 +5,19 @@
 #include "mysql.h"
 #include <spdlog/spdlog.h>
 
-MySQLClient::MySQLClient(uv_loop_t *loop, const char *ip, int port, const char *username, const char *password) {
+MySQLClient::Factory::Factory(const char *ip, int port, const char *username, const char *password)
+        : ip(ip), port(port), username(username), password(password) {}
+
+MySQLClient *MySQLClient::Factory::create_client(uv_loop_t *loop, const TableTask &task) {
+    return new MySQLClient(loop, task, ip, port, username, password);
+}
+
+MySQLClient::MySQLClient(uv_loop_t *loop, const TableTask &task,
+                         const char *ip, int port, const char *username, const char *password) {
     uv_tcp_init(loop, &ctx.tcp_client);
     strncpy(ctx.username, username, ConnContext::USERNAME_LEN - 1);
     strncpy(ctx.password, password, ConnContext::PASSWORD_LEN - 1);
+    ctx.task = task;
     connect(ip, port);
 }
 

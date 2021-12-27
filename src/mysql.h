@@ -5,15 +5,31 @@
 #ifndef CHANGE_SQL_MYSQL_H
 #define CHANGE_SQL_MYSQL_H
 
-#include <openssl/sha.h>
-#include <uv.h>
 #include <string.h>
+
+#include <uv.h>
+#include <openssl/sha.h>
+
+#include "config.h"
+#include "utils.h"
 
 class MySQLClient {
 public:
-    MySQLClient(uv_loop_t *loop, const char *ip, int port, const char *username, const char *password);
+    class Factory {
+    public:
+        Factory(const char *ip, int port, const char *username, const char *password);
+
+        MySQLClient *create_client(uv_loop_t *loop, const TableTask &task);
+
+    private:
+        const char *ip, *username, *password;
+        int port;
+    };
 
 private:
+    MySQLClient(uv_loop_t *loop, const TableTask &task,
+                const char *ip, int port, const char *username, const char *password);
+
     void connect(const char *ip, int port);
 
     struct ConnContext {
@@ -26,6 +42,8 @@ private:
         unsigned char seq = 0;
 
         uv_tcp_t tcp_client{};
+
+        TableTask task;
     };
 
     static void alloc_buffer(uv_handle_t *handle, size_t suggested_size, uv_buf_t *buf);

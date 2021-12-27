@@ -27,16 +27,21 @@ struct TableTask {
     std::string db, table;
     std::string table_ddl;
     std::vector<std::string> csvs;
+    uint16_t key_mask;
 };
 
 std::vector<std::string> list_dir(const char *p);
 
 std::string read_file(const char *path);
 
-uint16_t parse_ddl_key_position(const char *ddl);
+uint16_t parse_ddl(const char *ddl);
 
 std::vector<TableTask> extract_table_tasks(const char *data_path);
 
 std::string normalize_float(const std::string &number_str);
+
+std::vector<std::vector<TableTask>> distribute_tasks(const std::vector<TableTask> &tasks, int num_cores);
+
+void set_thread_affinity(int i);
 
 #endif //CHANGE_SQL_UTILS_H
