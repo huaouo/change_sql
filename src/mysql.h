@@ -111,9 +111,9 @@ private:
 
     static void send_create_table(ConnContext *ctx);
 
-    static std::string assemble_insert_statement(const Record &rec);
+    static std::string assemble_insert_statement(const std::string& table, const Record &rec);
 
-    static std::string assemble_update_statement(const Record &rec);
+    static std::string assemble_update_statement(const std::string& table, const Record &rec);
 
     static void on_shutdown(uv_shutdown_t *req, int status);
 

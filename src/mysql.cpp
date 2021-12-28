@@ -312,12 +312,54 @@ void MySQLClient::send_create_table(ConnContext *ctx) {
              &buf, 1, on_write_completed);
 }
 
-std::string MySQLClient::assemble_insert_statement(const Record &rec) {
-    // TODO
+std::string MySQLClient::assemble_insert_statement(const std::string &table, const Record &rec) {
+    std::string ret;
+    ret.reserve(128);
+    ret += "insert into `";
+    ret += table;
+    ret += "` values(";
+    for (int i = 0; i < rec.values.size(); i++) {
+        ret.push_back('\'');
+        ret += rec.values[i];
+        ret.push_back('\'');
+        if (i != rec.values.size() - 1) {
+            ret.push_back(',');
+        }
+    }
+    ret.push_back(')');
+    return ret;
 }
 
-std::string MySQLClient::assemble_update_statement(const Record &rec) {
-    // TODO
+std::string MySQLClient::assemble_update_statement(const std::string &table, const Record &rec) {
+    std::string ret, where;
+    ret.reserve(256);
+    where.reserve(128);
+    ret += "update `";
+    ret += table;
+    ret += "` set ";
+    where += "where ";
+    for (int i = 0; i < rec.values.size(); i++) {
+        if ((rec.unique_mask & (1 << i)) == 0) { // not unique, need update
+            ret.push_back('`');
+            ret += (*rec.field_names)[i];
+            ret += "`='";
+            ret += rec.values[i];
+            ret += "',";
+        } else { // unique, in the where clause
+            ret.push_back('`');
+            ret += (*rec.field_names)[i];
+            ret += "`='";
+            ret += rec.values[i];
+            ret += "' and";
+        }
+    }
+    ret.pop_back();
+    where.pop_back();
+    where.pop_back();
+    where.pop_back();
+    where.pop_back();
+    ret += where;
+    return ret;
 }
 
 void MySQLClient::on_shutdown(uv_shutdown_t *req, int status) {
@@ -333,10 +375,10 @@ void MySQLClient::send_insert(ConnContext *ctx) {
     std::string stmt;
     switch (rec.record_type) {
         case INSERT_REC:
-            stmt = assemble_insert_statement(rec);
+            stmt = assemble_insert_statement(ctx->task.table, rec);
             break;
         case UPDATE_REC:
-            stmt = assemble_update_statement(rec);
+            stmt = assemble_update_statement(ctx->task.table, rec);
             break;
         case EOF_REC:
             // TODO: close connection
