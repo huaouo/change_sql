@@ -9,7 +9,7 @@
 
 #include <uv.h>
 #include <xxhash.h>
-#include <phmap/phmap.h>
+#include <flat_hash_map.hpp>
 #include <openssl/sha.h>
 
 #include "config.h"
@@ -61,7 +61,7 @@ struct ConnContext {
     void reuse_write_buf();
 
     std::vector<BufferedReader*> csv_handles;
-    phmap::flat_hash_map<uint64_t, time_t> inserted;
+    ska::flat_hash_map<uint64_t, time_t> inserted;
     int cur_handle = 0;
     XXH64_state_t *hash_state;
 

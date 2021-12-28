@@ -2,9 +2,6 @@
 #include <thread>
 #include <vector>
 
-#include <phmap/phmap.h>
-#include <spdlog/spdlog.h>
-
 #include "mysql.h"
 #include "utils.h"
 

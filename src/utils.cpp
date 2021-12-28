@@ -3,7 +3,6 @@
 //
 
 #include <unordered_map>
-#include <phmap/phmap.h>
 
 #include "utils.h"
 
@@ -68,7 +67,7 @@ DDLInfo parse_ddl(const char *ddl) {
     };
 
     std::vector<std::string> field_names;
-    phmap::flat_hash_map<std::string, int> field_name_to_index;
+    std::unordered_map<std::string, int> field_name_to_index;
     int index = 0;
     uint16_t unique_mask = 0;
     while (true) {

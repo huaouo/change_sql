@@ -82,6 +82,7 @@ Record ConnContext::next_record() {
         }
     } else { // probe and insert, not implemented for now
         fmt::print("ERROR: probe and insert branch entered !!");
+        exit(-1);
     }
 
     return Record{.values=std::move(values), .field_names=&task.ddl_info.field_names,
