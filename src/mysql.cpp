@@ -28,13 +28,30 @@ ConnContext::~ConnContext() {
         delete p;
     }
     XXH64_freeState(hash_state);
+    delete shared_mgr;
 }
 
-void ConnContext::set_task(const TableTask &t) {
+void ConnContext::init_with_task(const TableTask &t) {
     task = t;
     for (auto &c: t.csvs) {
         csv_handles.push_back(new BufferedReader(c.c_str()));
     }
+    auto mem_id = fmt::format("{}.{}", task.db, task.table);
+    shared_mgr = new shared::segment(ipc::open_or_create, mem_id.c_str(), SHARED_MGR_SIZE);
+    inserted = shared_mgr->find_or_construct<shared::hash_map<uint64_t, time_t>>
+            ("inserted")(shared_mgr->get_segment_manager());
+    stored_cur_handle = shared_mgr->find<int>("cur_handle").first;
+    if (stored_cur_handle == nullptr) {
+        stored_cur_handle = shared_mgr->construct<int>("cur_handle")();
+        *stored_cur_handle = 0;
+    }
+    working_cur_handle = *stored_cur_handle;
+    stored_read_offset = shared_mgr->find<size_t>("read_offset").first;
+    if (stored_read_offset == nullptr) {
+        stored_read_offset = shared_mgr->construct<size_t>("read_offset")();
+        *stored_read_offset = 0;
+    }
+    csv_handles[working_cur_handle]->seek(*stored_read_offset);
 }
 
 void ConnContext::reuse_write_buf() {
@@ -47,15 +64,15 @@ Record ConnContext::next_record() {
     size_t num_fields = task.ddl_info.field_names.size();
     values.reserve(num_fields);
 
-    if (csv_handles[cur_handle]->peek() == EOF) {
-        cur_handle++;
-        if (cur_handle == csv_handles.size()) {
+    if (csv_handles[working_cur_handle]->peek() == EOF) {
+        working_cur_handle++;
+        if (working_cur_handle == csv_handles.size()) {
             return Record{.values=std::move(values), .field_names=&task.ddl_info.field_names,
                     .record_type=EOF_REC, .unique_mask=0};
         }
     }
 
-    auto &h = *csv_handles[cur_handle];
+    auto &h = *csv_handles[working_cur_handle];
     const auto unique_mask = task.ddl_info.unique_mask;
     XXH64_reset(hash_state, 0);
     std::string v;
@@ -66,11 +83,11 @@ Record ConnContext::next_record() {
         values.push_back(v);
     }
     uint64_t hash = XXH64_digest(hash_state);
-    if (cur_handle == 0) { // only insert
-        inserted[hash] = serialize_datetime(v.c_str());
-    } else if (cur_handle == csv_handles.size() - 1) { // only probe
-        auto it = inserted.find(hash);
-        if (it != inserted.end()) {
+    if (working_cur_handle == 0) { // only insert
+        (*inserted)[hash] = serialize_datetime(v.c_str());
+    } else if (working_cur_handle == csv_handles.size() - 1) { // only probe
+        auto it = inserted->find(hash);
+        if (it != inserted->end()) {
             auto prev_time = it->second;
             auto cur_time = serialize_datetime(v.c_str());
             if (cur_time > prev_time) {
@@ -85,6 +102,8 @@ Record ConnContext::next_record() {
         exit(-1);
     }
 
+    prepare_cur_handle = working_cur_handle;
+    prepare_read_offset = h.offset();
     return Record{.values=std::move(values), .field_names=&task.ddl_info.field_names,
             .record_type=type, .unique_mask=unique_mask};
 }
@@ -94,7 +113,7 @@ MySQLClient::MySQLClient(uv_loop_t *loop, const TableTask &task,
     uv_tcp_init(loop, &ctx.tcp_client);
     strncpy(ctx.username, username, sizeof(ConnContext::username) - 1);
     strncpy(ctx.password, password, sizeof(ConnContext::password) - 1);
-    ctx.set_task(task);
+    ctx.init_with_task(task);
     connect(ip, port);
 }
 
@@ -227,7 +246,13 @@ void MySQLClient::send_handshake_resp(ConnContext *ctx, char *challenge) {
              &buf, 1, on_write_completed);
 }
 
-void MySQLClient::on_write_completed(uv_write_t *req, int status) {}
+void MySQLClient::on_write_completed(uv_write_t *req, int status) {
+    auto ctx = reinterpret_cast<ConnContext *>(req->handle->data);
+    // TODO: The following two lines must be executed once the server
+    //  has received our request completely, but how to ensure this ?
+    *(ctx->stored_cur_handle) = ctx->prepare_cur_handle;
+    *(ctx->stored_read_offset) = ctx->prepare_read_offset;
+}
 
 void MySQLClient::send_create_database(ConnContext *ctx) {
     ctx->reuse_write_buf();

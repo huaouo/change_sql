@@ -7,13 +7,16 @@
 
 #include <dirent.h>
 #include <string.h>
-
 #include <string>
 #include <vector>
 #include <limits>
 #include <fstream>
 #include <algorithm>
+
+#include <flat_hash_map.hpp>
 #include <spdlog/spdlog.h>
+#include <boost/interprocess/allocators/allocator.hpp>
+#include <boost/interprocess/managed_shared_memory.hpp>
 
 struct Config {
     const char *data_path, *dst_ip, *dst_user, *dst_password;
@@ -57,6 +60,10 @@ public:
 
     char peek();
 
+    void seek(size_t offset);
+
+    size_t offset() const;
+
     std::string get_value_unsafe();
 
 private:
@@ -64,11 +71,22 @@ private:
     char *buf;
     FILE *f;
     size_t buf_end = BUF_SIZE,
-            read_idx = BUF_SIZE;
+            read_idx = BUF_SIZE,
+            offset_ = 0;
 };
 
 std::string deserialize_date(time_t datetime);
 
 time_t serialize_datetime(const char *input_str);
+
+namespace ipc = boost::interprocess;
+
+namespace shared {
+    using segment = ipc::managed_shared_memory;
+    using manager = segment::segment_manager;
+    template<typename T> using alloc = ipc::allocator<T, manager>;
+    template<typename K, typename V, typename KH = std::hash<K>, typename KEq = std::equal_to<K>>
+    using hash_map = ska::flat_hash_map<K, V, KH, KEq, alloc<std::pair<const K, V>>>;
+}
 
 #endif //CHANGE_SQL_UTILS_H

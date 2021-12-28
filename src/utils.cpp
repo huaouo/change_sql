@@ -2,8 +2,6 @@
 // Created by huaouo on 2021/12/22.
 //
 
-#include <unordered_map>
-
 #include "utils.h"
 
 // change_sql --data_path /tmp/data --dst_ip 127.0.0.1 --dst_port 3306 --dst_user root --dst_password 123456789
@@ -46,7 +44,7 @@ std::string read_file(const char *path) {
 
 DDLInfo parse_ddl(const char *ddl) {
     int pos = 0;
-    std::unordered_map<std::string, int> m;
+    ska::flat_hash_map<std::string, int> m;
 
     // Skip after the first '('
     while (ddl[pos] != '(') pos++;
@@ -67,7 +65,7 @@ DDLInfo parse_ddl(const char *ddl) {
     };
 
     std::vector<std::string> field_names;
-    std::unordered_map<std::string, int> field_name_to_index;
+    ska::flat_hash_map<std::string, int> field_name_to_index;
     int index = 0;
     uint16_t unique_mask = 0;
     while (true) {
@@ -226,6 +224,15 @@ char BufferedReader::peek() {
     return buf[read_idx];
 }
 
+void BufferedReader::seek(size_t offset) {
+    fseek(f, offset, SEEK_SET);
+    offset_ = offset;
+}
+
+size_t BufferedReader::offset() const {
+    return offset_;
+}
+
 std::string BufferedReader::get_value_unsafe() {
     std::string ret;
     ret.reserve(48);
@@ -234,6 +241,7 @@ std::string BufferedReader::get_value_unsafe() {
         char c = buf[read_idx++];
         if (c == ',' || c == '\n') break;
         ret.push_back(c);
+        offset_++;
     }
     return ret;
 }

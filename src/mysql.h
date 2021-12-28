@@ -40,7 +40,7 @@ struct Record {
 struct ConnContext {
     char username[33]{};
     char password[17]{};
-    char* in_buf;
+    char *in_buf;
     size_t in_idx = 0;
     unsigned char seq = 0;
 
@@ -48,7 +48,7 @@ struct ConnContext {
     TableTask task;
     ConnState state = PRE_CREATE_DATABASE;
 
-    char* write_buf_base;
+    char *write_buf_base;
     uv_write_t write_req;
     uv_buf_t write_buf;
 
@@ -56,16 +56,22 @@ struct ConnContext {
 
     ~ConnContext();
 
-    void set_task(const TableTask &task);
+    void init_with_task(const TableTask &t);
 
     void reuse_write_buf();
 
-    std::vector<BufferedReader*> csv_handles;
-    ska::flat_hash_map<uint64_t, time_t> inserted;
-    int cur_handle = 0;
+    std::vector<BufferedReader *> csv_handles;
+    shared::hash_map<uint64_t, time_t> *inserted;
+    int working_cur_handle = 0;
+    int prepare_cur_handle = 0;
+    size_t prepare_read_offset = 0;
+    int *stored_cur_handle;
+    size_t *stored_read_offset;
     XXH64_state_t *hash_state;
 
     Record next_record();
+
+    shared::segment *shared_mgr = nullptr;
 };
 
 class MySQLClient {

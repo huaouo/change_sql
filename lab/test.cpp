@@ -60,12 +60,10 @@
 //}
 
 #include <boost/interprocess/allocators/allocator.hpp>
-#include <boost/interprocess/containers/string.hpp>
 #include <boost/interprocess/managed_shared_memory.hpp>
 
-#include "flat_hash_map.hpp"
+#include <flat_hash_map.hpp>
 
-#include <unordered_map>
 #include <iostream>
 
 namespace ipc = boost::interprocess;
@@ -74,18 +72,19 @@ namespace Shared {
     using Segment = ipc::managed_shared_memory;
     using Manager = Segment::segment_manager;
     template<typename T> using Alloc = ipc::allocator<T, Manager>;
-    template<typename K, typename V, typename KH = std::hash<K>, typename KEq = std::equal_to<K> >
+    template<typename K, typename V, typename KH = std::hash<K>, typename KEq = std::equal_to<K>>
     using HashMap = ska::flat_hash_map<K, V, KH, KEq, Alloc<std::pair<const K, V>>>;
 }
 
 using OBJ_MAP_TYPE = Shared::HashMap<size_t, size_t>;
 
 int main() {
-    Shared::Segment msm(ipc::open_or_create, "test", 10ul << 20);
+//    Shared::Segment msm(ipc::open_or_create, "test", 10ul << 20);
+//
+//    Shared::Manager *mgr = msm.get_segment_manager();
+//    OBJ_MAP_TYPE &m = *msm.find_or_construct<OBJ_MAP_TYPE>("aname")(msm.get_segment_manager());
+//
+//    m.emplace(32, 12);
+//    std::cout << m[42] << std::endl;
 
-    Shared::Manager *mgr = msm.get_segment_manager();
-    OBJ_MAP_TYPE &m = *msm.find_or_construct<OBJ_MAP_TYPE>("aname")(msm.get_segment_manager());
-
-    m.emplace(32, 12);
-    std::cout << m[42] << std::endl;
 }
