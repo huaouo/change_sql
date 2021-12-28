@@ -15,15 +15,26 @@ MySQLClient *MySQLClient::Factory::create_client(uv_loop_t *loop, const TableTas
 }
 
 ConnContext::ConnContext() {
+    in_buf = new char[65536];
+    write_buf_base = new char[65536];
     write_buf = uv_buf_init(write_buf_base, 0);
     hash_state = XXH64_createState();
-    for (auto &c: task.csvs) {
-        csv_handles.emplace_back(c.c_str());
-    }
 }
 
 ConnContext::~ConnContext() {
+    delete[] in_buf;
+    delete[] write_buf_base;
+    for (auto p: csv_handles) {
+        delete p;
+    }
     XXH64_freeState(hash_state);
+}
+
+void ConnContext::set_task(const TableTask &t) {
+    task = t;
+    for (auto &c: t.csvs) {
+        csv_handles.push_back(new BufferedReader(c.c_str()));
+    }
 }
 
 void ConnContext::reuse_write_buf() {
@@ -36,14 +47,15 @@ Record ConnContext::next_record() {
     size_t num_fields = task.ddl_info.field_names.size();
     values.reserve(num_fields);
 
-    if (csv_handles[cur_handle].peek() == EOF) {
+    if (csv_handles[cur_handle]->peek() == EOF) {
         cur_handle++;
         if (cur_handle == csv_handles.size()) {
-            return Record{.values =values, .field_names=task.ddl_info.field_names, .record_type=EOF_REC, .unique_mask=0};
+            return Record{.values=std::move(values), .field_names=&task.ddl_info.field_names,
+                    .record_type=EOF_REC, .unique_mask=0};
         }
     }
 
-    auto &h = csv_handles[cur_handle];
+    auto &h = *csv_handles[cur_handle];
     const auto unique_mask = task.ddl_info.unique_mask;
     XXH64_reset(hash_state, 0);
     std::string v;
@@ -72,7 +84,8 @@ Record ConnContext::next_record() {
         fmt::print("ERROR: probe and insert branch entered !!");
     }
 
-    return Record{.values =values, .field_names=task.ddl_info.field_names, .record_type=type, .unique_mask=unique_mask};
+    return Record{.values=std::move(values), .field_names=&task.ddl_info.field_names,
+            .record_type=type, .unique_mask=unique_mask};
 }
 
 MySQLClient::MySQLClient(uv_loop_t *loop, const TableTask &task,
@@ -80,7 +93,7 @@ MySQLClient::MySQLClient(uv_loop_t *loop, const TableTask &task,
     uv_tcp_init(loop, &ctx.tcp_client);
     strncpy(ctx.username, username, sizeof(ConnContext::username) - 1);
     strncpy(ctx.password, password, sizeof(ConnContext::password) - 1);
-    ctx.task = task;
+    ctx.set_task(task);
     connect(ip, port);
 }
 
@@ -273,8 +286,54 @@ void MySQLClient::send_create_table(ConnContext *ctx) {
              &buf, 1, on_write_completed);
 }
 
-void MySQLClient::send_insert(ConnContext *ctx) {
+std::string MySQLClient::assemble_insert_statement(const Record &rec) {
+    // TODO
+}
 
+std::string MySQLClient::assemble_update_statement(const Record &rec) {
+    // TODO
+}
+
+void MySQLClient::on_shutdown(uv_shutdown_t *req, int status) {
+    uv_close((uv_handle_t *) req->handle, NULL);
+    delete req;
+}
+
+void MySQLClient::send_insert(ConnContext *ctx) {
+    Record rec = ctx->next_record();
+    while (rec.record_type == NOP_REC) {
+        rec = ctx->next_record();
+    }
+    std::string stmt;
+    switch (rec.record_type) {
+        case INSERT_REC:
+            stmt = assemble_insert_statement(rec);
+            break;
+        case UPDATE_REC:
+            stmt = assemble_update_statement(rec);
+            break;
+        case EOF_REC:
+            // TODO: close connection
+            auto shutdown_req = new uv_shutdown_t;
+            uv_shutdown(shutdown_req, (uv_stream_t *) &ctx->tcp_client, on_shutdown);
+            return;
+    }
+
+    ctx->reuse_write_buf();
+    auto buf = ctx->write_buf;
+
+    memcpy(buf.base + buf.len, empty_header, sizeof(empty_header));
+    buf.len += sizeof(empty_header);
+    *(buf.base + buf.len) = 0x03; // COM_QUERY
+    buf.len += 1;
+    memcpy(buf.base + buf.len, stmt.c_str(), stmt.size());
+    buf.len += stmt.size();
+
+    size_t header_len = buf.len - 4;
+    memcpy(buf.base, &header_len, 3);
+
+    uv_write(&ctx->write_req, reinterpret_cast<uv_stream_t *>(&ctx->tcp_client),
+             &buf, 1, on_write_completed);
 }
 
 unsigned char MySQLClient::empty_header[4] = {0x00, 0x00, 0x00, 0x00};

@@ -27,17 +27,10 @@
 //    fmt::print("{:x}", 23);
 //}
 
-char buf[4*1024*1024];
-
 int main() {
     auto beg = std::chrono::high_resolution_clock::now();
-    FILE *a = fopen("/home/huaouo/data/src_a/b/4.csv", "r");
-    int c;
-//    while (fgetc(a) != EOF) { c++; }
-    while (fread(buf, 1, 4*1024*1024, a) == 4*1024*1024) { c++; }
-    fclose(a);
-    auto end = std::chrono::high_resolution_clock::now();
-    std::cout << std::chrono::duration_cast<std::chrono::microseconds>(end - beg).count() << std::endl;
-    std::cout << c << std::endl;
+    FILE *a = fopen("/home/huaouo/data/src_a/a/4.csv", "rb");
+    char *buf = new char[4 * 1024 * 1024];
+    fread(buf, 1, 4 * 1024 * 1024, a);
 }
 

@@ -24,15 +24,15 @@ enum ConnState {
 };
 
 enum RecordType {
-    INSERT_REC = 0,
+    NOP_REC = 0,
+    INSERT_REC,
     UPDATE_REC,
-    NOP_REC,
     EOF_REC
 };
 
 struct Record {
     std::vector<std::string> values;
-    const std::vector<std::string> &field_names;
+    const std::vector<std::string> *field_names;
     RecordType record_type;
     uint16_t unique_mask;
 };
@@ -40,7 +40,7 @@ struct Record {
 struct ConnContext {
     char username[33]{};
     char password[17]{};
-    char in_buf[65536]{};
+    char* in_buf;
     size_t in_idx = 0;
     unsigned char seq = 0;
 
@@ -48,7 +48,7 @@ struct ConnContext {
     TableTask task;
     ConnState state = PRE_CREATE_DATABASE;
 
-    char write_buf_base[65536];
+    char* write_buf_base;
     uv_write_t write_req;
     uv_buf_t write_buf;
 
@@ -56,9 +56,11 @@ struct ConnContext {
 
     ~ConnContext();
 
+    void set_task(const TableTask &task);
+
     void reuse_write_buf();
 
-    std::vector<BufferedReader> csv_handles;
+    std::vector<BufferedReader*> csv_handles;
     phmap::flat_hash_map<uint64_t, time_t> inserted;
     int cur_handle = 0;
     XXH64_state_t *hash_state;
@@ -102,6 +104,12 @@ private:
     static void send_switch_database(ConnContext *ctx);
 
     static void send_create_table(ConnContext *ctx);
+
+    static std::string assemble_insert_statement(const Record &rec);
+
+    static std::string assemble_update_statement(const Record &rec);
+
+    static void on_shutdown(uv_shutdown_t *req, int status);
 
     static void send_insert(ConnContext *ctx);
 

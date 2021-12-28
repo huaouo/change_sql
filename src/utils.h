@@ -57,15 +57,14 @@ public:
 
     char peek();
 
-    char get_unsafe();
-
     std::string get_value_unsafe();
 
 private:
-    char buf[4 * 1024 * 1024];
+    const int BUF_SIZE = 4 * 1024 * 1024;
+    char *buf;
     FILE *f;
-    size_t buf_end = sizeof(buf),
-            read_idx = sizeof(buf);
+    size_t buf_end = BUF_SIZE,
+            read_idx = BUF_SIZE;
 };
 
 std::string deserialize_date(time_t datetime);

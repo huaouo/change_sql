@@ -76,6 +76,7 @@ DDLInfo parse_ddl(const char *ddl) {
         if (field_name[0] == '`') { // field definition line
             auto field_type = next_token(); // not used for now
             field_name_to_index[field_name] = index;
+            field_names.push_back(field_name);
             index++;
         } else { // index line
             while (ddl[pos] != '(') pos++;
@@ -205,16 +206,18 @@ void set_thread_affinity(int i) {
 
 BufferedReader::BufferedReader(const char *path) {
     f = fopen(path, "rb");
+    buf = new char[BUF_SIZE];
 }
 
 BufferedReader::~BufferedReader() {
     fclose(f);
+    delete[] buf;
 }
 
 char BufferedReader::peek() {
     if (read_idx == buf_end) {
-        if (buf_end == sizeof(buf)) {
-            buf_end = fread(buf, sizeof(buf), 1, f);
+        if (buf_end == BUF_SIZE) {
+            buf_end = fread(buf, BUF_SIZE, 1, f);
             read_idx = 0;
             if (buf_end == 0) return EOF;
         } else {
@@ -222,10 +225,6 @@ char BufferedReader::peek() {
         }
     }
     return buf[read_idx];
-}
-
-char BufferedReader::get_unsafe() {
-    return buf[read_idx++];
 }
 
 std::string BufferedReader::get_value_unsafe() {
