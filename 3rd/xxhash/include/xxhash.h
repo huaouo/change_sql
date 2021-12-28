@@ -83,7 +83,6 @@ extern "C" {
 /* ****************************
  *  INLINE mode
  ******************************/
-#define XXH_INLINE_ALL
 /*!
  * XXH_INLINE_ALL (and XXH_PRIVATE_API)
  * Use these build macros to inline xxhash into the target unit.

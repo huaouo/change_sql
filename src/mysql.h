@@ -8,12 +8,12 @@
 #include <string.h>
 
 #include <uv.h>
+#include <xxhash.h>
 #include <phmap/phmap.h>
 #include <openssl/sha.h>
 
 #include "config.h"
 #include "utils.h"
-#include "xxhash.h"
 
 enum ConnState {
     PRE_CREATE_DATABASE = 0,
