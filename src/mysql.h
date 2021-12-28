@@ -8,10 +8,63 @@
 #include <string.h>
 
 #include <uv.h>
+#include <phmap/phmap.h>
 #include <openssl/sha.h>
 
 #include "config.h"
 #include "utils.h"
+#include "xxhash.h"
+
+enum ConnState {
+    PRE_CREATE_DATABASE = 0,
+    PRE_SWITCH_DB,
+    PRE_CREATE_TABLE,
+    // TODO: use prepared statements
+    INSERT
+};
+
+enum RecordType {
+    INSERT_REC = 0,
+    UPDATE_REC,
+    NOP_REC,
+    EOF_REC
+};
+
+struct Record {
+    std::vector<std::string> values;
+    const std::vector<std::string> &field_names;
+    RecordType record_type;
+    uint16_t unique_mask;
+};
+
+struct ConnContext {
+    char username[33]{};
+    char password[17]{};
+    char in_buf[65536]{};
+    size_t in_idx = 0;
+    unsigned char seq = 0;
+
+    uv_tcp_t tcp_client{};
+    TableTask task;
+    ConnState state = PRE_CREATE_DATABASE;
+
+    char write_buf_base[65536];
+    uv_write_t write_req;
+    uv_buf_t write_buf;
+
+    ConnContext();
+
+    ~ConnContext();
+
+    void reuse_write_buf();
+
+    std::vector<BufferedReader> csv_handles;
+    phmap::flat_hash_map<uint64_t, time_t> inserted;
+    int cur_handle = 0;
+    XXH64_state_t *hash_state;
+
+    Record next_record();
+};
 
 class MySQLClient {
 public:
@@ -32,20 +85,6 @@ private:
 
     void connect(const char *ip, int port);
 
-    struct ConnContext {
-        static const size_t USERNAME_LEN = 33, PASSWORD_LEN = 17, BUF_LEN = 128;
-
-        char username[USERNAME_LEN]{};
-        char password[PASSWORD_LEN]{};
-        char in_buf[BUF_LEN]{};
-        size_t in_idx = 0;
-        unsigned char seq = 0;
-
-        uv_tcp_t tcp_client{};
-
-        TableTask task;
-    };
-
     static void alloc_buffer(uv_handle_t *handle, size_t suggested_size, uv_buf_t *buf);
 
     static void on_connect(uv_connect_t *req, int status);
@@ -58,7 +97,15 @@ private:
 
     static void on_write_completed(uv_write_t *req, int status);
 
-    static unsigned char auth_block_1[36], auth_block_2[2], auth_block_3[154];
+    static void send_create_database(ConnContext *ctx);
+
+    static void send_switch_database(ConnContext *ctx);
+
+    static void send_create_table(ConnContext *ctx);
+
+    static void send_insert(ConnContext *ctx);
+
+    static unsigned char empty_header[4], auth_block_1[36], auth_block_2[2], auth_block_3[154];
 
     ConnContext ctx;
 };

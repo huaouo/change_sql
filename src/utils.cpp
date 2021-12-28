@@ -45,8 +45,7 @@ std::string read_file(const char *path) {
     return file_contents;
 }
 
-uint16_t parse_ddl(const char *ddl) {
-    uint16_t ret = 0;
+DDLInfo parse_ddl(const char *ddl) {
     int pos = 0;
     std::unordered_map<std::string, int> m;
 
@@ -68,6 +67,7 @@ uint16_t parse_ddl(const char *ddl) {
         return {&ddl[pos_beg], &ddl[pos]};
     };
 
+    std::vector<std::string> field_names;
     phmap::flat_hash_map<std::string, int> field_name_to_index;
     int index = 0;
     uint16_t unique_mask = 0;
@@ -92,7 +92,15 @@ uint16_t parse_ddl(const char *ddl) {
         if (ddl[pos] == ')') break;
         pos++;
     }
-    return unique_mask;
+
+    if (unique_mask == 0) {
+        unique_mask = (1 << field_name_to_index.size()) - 1;
+    }
+    if (field_names[field_names.size() - 1] != "`updated_at`") {
+        fmt::print("ERROR: last field is not `updated_at` !!");
+        exit(-1);
+    }
+    return DDLInfo{.field_names = field_names, .unique_mask=unique_mask};
 }
 
 std::vector<TableTask> extract_table_tasks(const char *data_path) {
@@ -122,8 +130,8 @@ std::vector<TableTask> extract_table_tasks(const char *data_path) {
                     .db = db,
                     .table = table_names[i],
                     .table_ddl = table_ddls[i],
+                    .ddl_info = parse_ddl(table_ddls[i].c_str()),
                     .csvs = csvs,
-                    .key_mask = parse_ddl(table_ddls[i].c_str())
             });
         }
     }
@@ -193,4 +201,60 @@ void set_thread_affinity(int i) {
     CPU_ZERO(&cpuset);
     CPU_SET(i, &cpuset);
     pthread_setaffinity_np(pthread_self(), sizeof(cpu_set_t), &cpuset);
+}
+
+BufferedReader::BufferedReader(const char *path) {
+    f = fopen(path, "rb");
+}
+
+BufferedReader::~BufferedReader() {
+    fclose(f);
+}
+
+char BufferedReader::peek() {
+    if (read_idx == buf_end) {
+        if (buf_end == sizeof(buf)) {
+            buf_end = fread(buf, sizeof(buf), 1, f);
+            read_idx = 0;
+            if (buf_end == 0) return EOF;
+        } else {
+            return EOF;
+        }
+    }
+    return buf[read_idx];
+}
+
+char BufferedReader::get_unsafe() {
+    return buf[read_idx++];
+}
+
+std::string BufferedReader::get_value_unsafe() {
+    std::string ret;
+    ret.reserve(48);
+
+    while (true) {
+        char c = buf[read_idx++];
+        if (c == ',' || c == '\n') break;
+        ret.push_back(c);
+    }
+    return ret;
+}
+
+std::string deserialize_date(time_t datetime) {
+    char buf[20];
+    strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S", localtime(&datetime));
+    return buf;
+}
+
+time_t serialize_datetime(const char *input_str) {
+    struct tm input_date = {0};
+    input_date.tm_isdst = -1; // daylight saving time information is not available
+    input_date.tm_year = 1000 * (input_str[0] - '0') + 100 * (input_str[1] - '0') + 10 * (input_str[2] - '0') +
+                         1 * (input_str[3] - '0') - 1900;
+    input_date.tm_mon = 10 * (input_str[5] - '0') + 1 * (input_str[6] - '0') - 1;
+    input_date.tm_mday = 10 * (input_str[8] - '0') + 1 * (input_str[9] - '0');
+    input_date.tm_hour = 10 * (input_str[11] - '0') + 1 * (input_str[12] - '0');
+    input_date.tm_min = 10 * (input_str[14] - '0') + 1 * (input_str[15] - '0');
+    input_date.tm_sec = 10 * (input_str[17] - '0') + 1 * (input_str[18] - '0');
+    return mktime(&input_date);
 }

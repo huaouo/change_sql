@@ -2,8 +2,10 @@
 // Created by huaouo on 2021/12/21.
 //
 
-#include "mysql.h"
+#include <string.h>
 #include <spdlog/spdlog.h>
+
+#include "mysql.h"
 
 MySQLClient::Factory::Factory(const char *ip, int port, const char *username, const char *password)
         : ip(ip), port(port), username(username), password(password) {}
@@ -12,11 +14,72 @@ MySQLClient *MySQLClient::Factory::create_client(uv_loop_t *loop, const TableTas
     return new MySQLClient(loop, task, ip, port, username, password);
 }
 
+ConnContext::ConnContext() {
+    write_buf = uv_buf_init(write_buf_base, 0);
+    hash_state = XXH64_createState();
+    for (auto &c: task.csvs) {
+        csv_handles.emplace_back(c.c_str());
+    }
+}
+
+ConnContext::~ConnContext() {
+    XXH64_freeState(hash_state);
+}
+
+void ConnContext::reuse_write_buf() {
+    write_buf.len = 0;
+}
+
+Record ConnContext::next_record() {
+    RecordType type = INSERT_REC;
+    std::vector<std::string> values;
+    size_t num_fields = task.ddl_info.field_names.size();
+    values.reserve(num_fields);
+
+    if (csv_handles[cur_handle].peek() == EOF) {
+        cur_handle++;
+        if (cur_handle == csv_handles.size()) {
+            return Record{.values =values, .field_names=task.ddl_info.field_names, .record_type=EOF_REC, .unique_mask=0};
+        }
+    }
+
+    auto &h = csv_handles[cur_handle];
+    const auto unique_mask = task.ddl_info.unique_mask;
+    XXH64_reset(hash_state, 0);
+    std::string v;
+    for (int i = 0; i < num_fields; i++) {
+        v = h.get_value_unsafe();
+        if (((1 << i) & unique_mask) != 0)
+            XXH64_update(hash_state, v.c_str(), v.size());
+        values.push_back(v);
+    }
+    uint64_t hash = XXH64_digest(hash_state);
+    if (cur_handle == 0) { // only insert
+        inserted[hash] = serialize_datetime(v.c_str());
+    } else if (cur_handle == csv_handles.size() - 1) { // only probe
+        auto it = inserted.find(hash);
+        if (it != inserted.end()) {
+            auto prev_time = it->second;
+            auto cur_time = serialize_datetime(v.c_str());
+            if (cur_time > prev_time) {
+                type = UPDATE_REC;
+            } else {
+                values.clear();
+                type = NOP_REC;
+            }
+        }
+    } else { // probe and insert, not implemented for now
+        fmt::print("ERROR: probe and insert branch entered !!");
+    }
+
+    return Record{.values =values, .field_names=task.ddl_info.field_names, .record_type=type, .unique_mask=unique_mask};
+}
+
 MySQLClient::MySQLClient(uv_loop_t *loop, const TableTask &task,
                          const char *ip, int port, const char *username, const char *password) {
     uv_tcp_init(loop, &ctx.tcp_client);
-    strncpy(ctx.username, username, ConnContext::USERNAME_LEN - 1);
-    strncpy(ctx.password, password, ConnContext::PASSWORD_LEN - 1);
+    strncpy(ctx.username, username, sizeof(ConnContext::username) - 1);
+    strncpy(ctx.password, password, sizeof(ConnContext::password) - 1);
     ctx.task = task;
     connect(ip, port);
 }
@@ -72,6 +135,23 @@ void MySQLClient::handle_in_packet(ConnContext *ctx) {
         case 0xfe: // OK_Packet
             fmt::print("OK_Packet received\n");
             fflush(stdout);
+            switch (ctx->state) {
+                case PRE_CREATE_DATABASE:
+                    send_create_database(ctx);
+                    break;
+                case PRE_SWITCH_DB:
+                    send_switch_database(ctx);
+                    break;
+                case PRE_CREATE_TABLE:
+                    send_create_table(ctx);
+                    break;
+                case INSERT:
+                    send_insert(ctx);
+                    break;
+            }
+            if (ctx->state != INSERT) {
+                ctx->state = static_cast<ConnState>(ctx->state + 1);
+            }
             break;
         case 0x0a: { // Initial_Handshake_Packet
             fmt::print("Initial_Handshake_Packet received\n");
@@ -113,7 +193,8 @@ void MySQLClient::send_handshake_resp(ConnContext *ctx, char *challenge) {
     }
 
     // buf := auth_block_1 <concat> username <concat> auth_block_2 <concat> sha_password <concat> auth_block_3
-    auto buf = uv_buf_init(new char[256], 0);
+    ctx->reuse_write_buf();
+    auto buf = ctx->write_buf;
     memcpy(buf.base + buf.len, auth_block_1, sizeof(auth_block_1));
     buf.len += sizeof(auth_block_1);
     size_t len_username = strlen(ctx->username);
@@ -125,18 +206,78 @@ void MySQLClient::send_handshake_resp(ConnContext *ctx, char *challenge) {
     buf.len += 20;
     memcpy(buf.base + buf.len, auth_block_3, sizeof(auth_block_3));
     buf.len += sizeof(auth_block_3);
-    buf.base[0] = static_cast<uint8_t>(buf.len - 4);
+    size_t header_len = buf.len - 4;
+    memcpy(buf.base, &header_len, 3);
 
-    auto w = new uv_write_t;
-    w->data = buf.base;
-    uv_write(w, reinterpret_cast<uv_stream_t *>(&ctx->tcp_client),
+    uv_write(&ctx->write_req, reinterpret_cast<uv_stream_t *>(&ctx->tcp_client),
              &buf, 1, on_write_completed);
 }
 
-void MySQLClient::on_write_completed(uv_write_t *req, int status) {
-    delete[] reinterpret_cast<char *>(req->data);
-    delete req;
+void MySQLClient::on_write_completed(uv_write_t *req, int status) {}
+
+void MySQLClient::send_create_database(ConnContext *ctx) {
+    ctx->reuse_write_buf();
+    auto buf = ctx->write_buf;
+
+    memcpy(buf.base + buf.len, empty_header, sizeof(empty_header));
+    buf.len += sizeof(empty_header);
+    *(buf.base + buf.len) = 0x03; // COM_QUERY
+    buf.len += 1;
+    const char *create_db_str = "create database if not exists ";
+    size_t len_create_db_str = strlen(create_db_str);
+    memcpy(buf.base + buf.len, create_db_str, len_create_db_str);
+    buf.len += len_create_db_str;
+    memcpy(buf.base + buf.len, ctx->task.db.c_str(), ctx->task.db.size());
+    buf.len += ctx->task.db.size();
+
+    size_t header_len = buf.len - 4;
+    memcpy(buf.base, &header_len, 3);
+
+    uv_write(&ctx->write_req, reinterpret_cast<uv_stream_t *>(&ctx->tcp_client),
+             &buf, 1, on_write_completed);
 }
+
+void MySQLClient::send_switch_database(ConnContext *ctx) {
+    ctx->reuse_write_buf();
+    auto buf = ctx->write_buf;
+
+    memcpy(buf.base + buf.len, empty_header, sizeof(empty_header));
+    buf.len += sizeof(empty_header);
+    *(buf.base + buf.len) = 0x02; // COM_INIT_DB
+    buf.len += 1;
+    memcpy(buf.base + buf.len, ctx->task.db.c_str(), ctx->task.db.size());
+    buf.len += ctx->task.db.size();
+
+    size_t header_len = buf.len - 4;
+    memcpy(buf.base, &header_len, 3);
+
+    uv_write(&ctx->write_req, reinterpret_cast<uv_stream_t *>(&ctx->tcp_client),
+             &buf, 1, on_write_completed);
+}
+
+void MySQLClient::send_create_table(ConnContext *ctx) {
+    ctx->reuse_write_buf();
+    auto buf = ctx->write_buf;
+
+    memcpy(buf.base + buf.len, empty_header, sizeof(empty_header));
+    buf.len += sizeof(empty_header);
+    *(buf.base + buf.len) = 0x03; // COM_QUERY
+    buf.len += 1;
+    memcpy(buf.base + buf.len, ctx->task.table_ddl.c_str(), ctx->task.table_ddl.size());
+    buf.len += ctx->task.table_ddl.size();
+
+    size_t header_len = buf.len - 4;
+    memcpy(buf.base, &header_len, 3);
+
+    uv_write(&ctx->write_req, reinterpret_cast<uv_stream_t *>(&ctx->tcp_client),
+             &buf, 1, on_write_completed);
+}
+
+void MySQLClient::send_insert(ConnContext *ctx) {
+
+}
+
+unsigned char MySQLClient::empty_header[4] = {0x00, 0x00, 0x00, 0x00};
 
 unsigned char MySQLClient::auth_block_1[36] =
         {0x00, 0x00, 0x00, 0x01,

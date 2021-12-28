@@ -16,7 +16,8 @@ int main(int argc, char *argv[]) {
             cfg.dst_ip, cfg.dst_port, cfg.dst_user, cfg.dst_password);
 
     std::vector<std::thread> threads;
-    for (int i = 0; i < NUM_CPU_CORES; i++) {
+//    for (int i = 0; i < NUM_CPU_CORES; i++) {
+    for (int i = 0; i < 1; i++) {
         threads.emplace_back([&, i]() {
             set_thread_affinity(i);
             uv_loop_t loop;
@@ -24,9 +25,10 @@ int main(int argc, char *argv[]) {
 
             auto tasks = distributed_tasks[i];
             std::vector<MySQLClient *> clients;
-            for (auto &task: tasks) {
-                clients.push_back(factory.create_client(&loop, task));
-            }
+//            for (auto &task: tasks) {
+//                clients.push_back(factory.create_client(&loop, task));
+//            }
+            clients.push_back(factory.create_client(&loop, tasks[0]));
             uv_run(&loop, UV_RUN_DEFAULT);
             uv_loop_close(&loop);
             for (auto c: clients) delete c;

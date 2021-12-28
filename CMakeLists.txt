@@ -15,5 +15,5 @@ add_subdirectory(3rd/libuv)
 add_executable(change_sql src/main.cpp src/mysql.cpp src/utils.cpp)
 target_link_libraries(change_sql phmap spdlog uv_a crypto)
 
-#add_executable(lab lab/test.cpp)
-#target_link_libraries(lab fmt)
+add_executable(lab lab/test.cpp)
+target_link_libraries(lab spdlog)
