@@ -75,8 +75,6 @@ private:
             offset_ = 0;
 };
 
-std::string deserialize_date(time_t datetime);
-
 time_t serialize_datetime(const char *input_str);
 
 namespace ipc = boost::interprocess;

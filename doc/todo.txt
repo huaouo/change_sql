@@ -1,0 +1,5 @@
+TODO
+---------
+1. batch insert
+2. increase # of connections
+3. fix the position issue

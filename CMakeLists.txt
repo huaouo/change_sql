@@ -17,5 +17,5 @@ add_subdirectory(3rd/flat_hash_map)
 add_executable(run src/main.cpp src/mysql.cpp src/utils.cpp)
 target_link_libraries(run flat_hash_map spdlog xxhash boost.ipc rt uv_a crypto)
 
-add_executable(lab lab/test.cpp)
-target_link_libraries(lab spdlog flat_hash_map boost.ipc rt)
+#add_executable(lab lab/test.cpp)
+#target_link_libraries(lab spdlog flat_hash_map boost.ipc rt)

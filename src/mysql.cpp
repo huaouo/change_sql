@@ -84,7 +84,7 @@ Record ConnContext::next_record() {
     }
     uint64_t hash = XXH64_digest(hash_state);
     if (working_cur_handle == 0) { // only insert
-        (*inserted)[hash] = serialize_datetime(v.c_str());
+        inserted->insert(std::make_pair(hash, serialize_datetime(v.c_str())));
     } else if (working_cur_handle == csv_handles.size() - 1) { // only probe
         auto it = inserted->find(hash);
         if (it != inserted->end()) {
@@ -152,7 +152,6 @@ void MySQLClient::on_data_ready(uv_stream_t *client, ssize_t nread, const uv_buf
 }
 
 void MySQLClient::handle_in_packet(ConnContext *ctx) {
-    ctx->seq = ctx->in_buf[3];
     unsigned char packet_type = ctx->in_buf[4];
     char login_challenge[20];
     switch (packet_type) {
@@ -163,11 +162,10 @@ void MySQLClient::handle_in_packet(ConnContext *ctx) {
             }
             fmt::print("\n");
             fflush(stdout);
+            exit(-1);
             break;
         case 0x00:
         case 0xfe: // OK_Packet
-            fmt::print("OK_Packet received\n");
-            fflush(stdout);
             switch (ctx->state) {
                 case PRE_CREATE_DATABASE:
                     send_create_database(ctx);
@@ -187,8 +185,6 @@ void MySQLClient::handle_in_packet(ConnContext *ctx) {
             }
             break;
         case 0x0a: { // Initial_Handshake_Packet
-            fmt::print("Initial_Handshake_Packet received\n");
-            fflush(stdout);
             char *it = ctx->in_buf + 5;
             // server version
             while (*it != 0) it++;
@@ -249,7 +245,8 @@ void MySQLClient::send_handshake_resp(ConnContext *ctx, char *challenge) {
 void MySQLClient::on_write_completed(uv_write_t *req, int status) {
     auto ctx = reinterpret_cast<ConnContext *>(req->handle->data);
     // TODO: The following two lines must be executed once the server
-    //  has received our request completely, but how to ensure this ?
+    //  has received our request completely, but how to ensure this?
+    //  Aslo, any error shouldn't occur for the insert request.
     *(ctx->stored_cur_handle) = ctx->prepare_cur_handle;
     *(ctx->stored_read_offset) = ctx->prepare_read_offset;
 }
@@ -327,6 +324,7 @@ std::string MySQLClient::assemble_insert_statement(const std::string &table, con
         }
     }
     ret.push_back(')');
+    fmt::print("{}\n", ret);
     return ret;
 }
 
@@ -359,6 +357,7 @@ std::string MySQLClient::assemble_update_statement(const std::string &table, con
     where.pop_back();
     where.pop_back();
     ret += where;
+    fmt::print("{}\n", ret);
     return ret;
 }
 

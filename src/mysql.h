@@ -42,7 +42,6 @@ struct ConnContext {
     char password[17]{};
     char *in_buf;
     size_t in_idx = 0;
-    unsigned char seq = 0;
 
     uv_tcp_t tcp_client{};
     TableTask task;

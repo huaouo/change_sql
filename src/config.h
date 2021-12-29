@@ -9,4 +9,6 @@
 
 #define SHARED_MGR_SIZE (96*1024*1024)
 
+#define INSERT_NUM_TUPLES (20000)
+
 #endif //CHANGE_SQL_CONFIG_H

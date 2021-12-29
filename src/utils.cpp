@@ -214,7 +214,7 @@ BufferedReader::~BufferedReader() {
 char BufferedReader::peek() {
     if (read_idx == buf_end) {
         if (buf_end == BUF_SIZE) {
-            buf_end = fread(buf, BUF_SIZE, 1, f);
+            buf_end = fread(buf, 1, BUF_SIZE, f);
             read_idx = 0;
             if (buf_end == 0) return EOF;
         } else {
@@ -238,18 +238,15 @@ std::string BufferedReader::get_value_unsafe() {
     ret.reserve(48);
 
     while (true) {
+        if (read_idx == buf_end) {
+            peek();
+        }
         char c = buf[read_idx++];
+        offset_++;
         if (c == ',' || c == '\n') break;
         ret.push_back(c);
-        offset_++;
     }
     return ret;
-}
-
-std::string deserialize_date(time_t datetime) {
-    char buf[20];
-    strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S", localtime(&datetime));
-    return buf;
 }
 
 time_t serialize_datetime(const char *input_str) {
