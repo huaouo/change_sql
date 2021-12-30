@@ -14,21 +14,29 @@ int main(int argc, char *argv[]) {
 
     std::vector<std::thread> threads;
     for (int i = 0; i < NUM_CPU_CORES; i++) {
-//    for (int i = 0; i < 1; i++) {
         threads.emplace_back([&, i]() {
             set_thread_affinity(i);
             uv_loop_t loop;
             uv_loop_init(&loop);
 
-            auto tasks = distributed_tasks[i];
-            std::vector<MySQLClient *> clients;
+            auto& tasks = distributed_tasks[i];
             for (auto &task: tasks) {
-                clients.push_back(factory.create_client(&loop, task));
+                auto completed_file = fmt::format("/dev/shm/{}.{}.completed", task.db, task.table);
+                auto state_file = fmt::format("/dev/shm/{}.{}", task.db, task.table);
+                if (access(completed_file.c_str(), F_OK) == 0) {
+                    continue;
+                }
+
+                auto c = factory.create_client(&loop, task);
+                uv_run(&loop, UV_RUN_DEFAULT);
+                delete c;
+                int fd = open(completed_file.c_str(), O_RDWR | O_CREAT, 0644);
+                if (fd != -1) {
+                    close(fd);
+                }
+                remove(state_file.c_str());
             }
-//            clients.push_back(factory.create_client(&loop, tasks[0]));
-            uv_run(&loop, UV_RUN_DEFAULT);
             uv_loop_close(&loop);
-            for (auto c: clients) delete c;
         });
     }
 

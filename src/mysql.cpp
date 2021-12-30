@@ -16,7 +16,7 @@ MySQLClient *MySQLClient::Factory::create_client(uv_loop_t *loop, const TableTas
 
 ConnContext::ConnContext() {
     in_buf = new char[65536];
-    write_buf_base = new char[65536];
+    write_buf_base = new char[64 * 1024];
     write_buf = uv_buf_init(write_buf_base, 0);
     hash_state = XXH64_createState();
 }
@@ -40,6 +40,7 @@ void ConnContext::init_with_task(const TableTask &t) {
     shared_mgr = new shared::segment(ipc::open_or_create, mem_id.c_str(), SHARED_MGR_SIZE);
     inserted = shared_mgr->find_or_construct<shared::hash_map<uint64_t, time_t>>
             ("inserted")(shared_mgr->get_segment_manager());
+    inserted->reserve(INSERTED_TABLE_RESERVED_SIZE);
     stored_cur_handle = shared_mgr->find<int>("cur_handle").first;
     if (stored_cur_handle == nullptr) {
         stored_cur_handle = shared_mgr->construct<int>("cur_handle")();
@@ -67,6 +68,7 @@ Record ConnContext::next_record() {
     if (csv_handles[working_cur_handle]->peek() == EOF) {
         working_cur_handle++;
         if (working_cur_handle == csv_handles.size()) {
+            working_cur_handle--;
             return Record{.values=std::move(values), .field_names=&task.ddl_info.field_names,
                     .record_type=EOF_REC, .unique_mask=0};
         }
@@ -83,29 +85,38 @@ Record ConnContext::next_record() {
         values.push_back(v);
     }
     uint64_t hash = XXH64_digest(hash_state);
-    if (working_cur_handle == 0) { // only insert
+    auto it = inserted->find(hash);
+    if (it == inserted->end()) {
         inserted->insert(std::make_pair(hash, serialize_datetime(v.c_str())));
-    } else if (working_cur_handle == csv_handles.size() - 1) { // only probe
-        auto it = inserted->find(hash);
-        if (it != inserted->end()) {
-            auto prev_time = it->second;
-            auto cur_time = serialize_datetime(v.c_str());
-            if (cur_time > prev_time) {
-                type = UPDATE_REC;
-            } else {
-                values.clear();
-                type = NOP_REC;
-            }
+    } else {
+        auto prev_time = it->second;
+        auto cur_time = serialize_datetime(v.c_str());
+        if (cur_time > prev_time) {
+            type = UPDATE_REC;
+            (*inserted)[hash] = cur_time;
+        } else {
+            values.clear();
+            type = NOP_REC;
         }
-    } else { // probe and insert, not implemented for now
-        fmt::print("ERROR: probe and insert branch entered !!");
-        exit(-1);
     }
 
-    prepare_cur_handle = working_cur_handle;
-    prepare_read_offset = h.offset();
     return Record{.values=std::move(values), .field_names=&task.ddl_info.field_names,
             .record_type=type, .unique_mask=unique_mask};
+}
+
+void ConnContext::update_prepared_state_by_cur() {
+    prepare_cur_handle = working_cur_handle;
+    prepare_read_offset = csv_handles[working_cur_handle]->offset();
+}
+
+void ConnContext::update_prepared_state_by_prev() {
+    prepare_cur_handle = prev_working_cur_handle;
+    prepare_read_offset = prev_working_read_offset;
+}
+
+void ConnContext::update_prev_working_state() {
+    prev_working_cur_handle = working_cur_handle;
+    prev_working_read_offset = csv_handles[working_cur_handle]->offset();
 }
 
 MySQLClient::MySQLClient(uv_loop_t *loop, const TableTask &task,
@@ -166,6 +177,8 @@ void MySQLClient::handle_in_packet(ConnContext *ctx) {
             break;
         case 0x00:
         case 0xfe: // OK_Packet
+//            fmt::print("OK received\n");
+//            fflush(stdout);
             switch (ctx->state) {
                 case PRE_CREATE_DATABASE:
                     send_create_database(ctx);
@@ -309,22 +322,25 @@ void MySQLClient::send_create_table(ConnContext *ctx) {
              &buf, 1, on_write_completed);
 }
 
-std::string MySQLClient::assemble_insert_statement(const std::string &table, const Record &rec) {
+std::string MySQLClient::assemble_insert_statement(const std::string &table, const std::vector<Record> &records) {
     std::string ret;
-    ret.reserve(128);
     ret += "insert into `";
     ret += table;
-    ret += "` values(";
-    for (int i = 0; i < rec.values.size(); i++) {
-        ret.push_back('\'');
-        ret += rec.values[i];
-        ret.push_back('\'');
-        if (i != rec.values.size() - 1) {
-            ret.push_back(',');
+    ret += "` values";
+    for (auto &rec: records) {
+        ret.push_back('(');
+        for (int i = 0; i < rec.values.size(); i++) {
+            ret.push_back('\'');
+            ret += rec.values[i];
+            ret.push_back('\'');
+            if (i != rec.values.size() - 1) {
+                ret.push_back(',');
+            }
         }
+        ret += "),";
     }
-    ret.push_back(')');
-    fmt::print("{}\n", ret);
+    ret.pop_back();
+//    fmt::print("{}\n", ret);
     return ret;
 }
 
@@ -335,20 +351,18 @@ std::string MySQLClient::assemble_update_statement(const std::string &table, con
     ret += "update `";
     ret += table;
     ret += "` set ";
-    where += "where ";
+    where += " where ";
     for (int i = 0; i < rec.values.size(); i++) {
         if ((rec.unique_mask & (1 << i)) == 0) { // not unique, need update
-            ret.push_back('`');
             ret += (*rec.field_names)[i];
-            ret += "`='";
+            ret += "='";
             ret += rec.values[i];
             ret += "',";
         } else { // unique, in the where clause
-            ret.push_back('`');
-            ret += (*rec.field_names)[i];
-            ret += "`='";
-            ret += rec.values[i];
-            ret += "' and";
+            where += (*rec.field_names)[i];
+            where += "='";
+            where += rec.values[i];
+            where += "' and";
         }
     }
     ret.pop_back();
@@ -367,24 +381,65 @@ void MySQLClient::on_shutdown(uv_shutdown_t *req, int status) {
 }
 
 void MySQLClient::send_insert(ConnContext *ctx) {
-    Record rec = ctx->next_record();
-    while (rec.record_type == NOP_REC) {
-        rec = ctx->next_record();
-    }
     std::string stmt;
-    switch (rec.record_type) {
-        case INSERT_REC:
-            stmt = assemble_insert_statement(ctx->task.table, rec);
-            break;
-        case UPDATE_REC:
-            stmt = assemble_update_statement(ctx->task.table, rec);
-            break;
-        case EOF_REC:
-            // TODO: close connection
-            auto shutdown_req = new uv_shutdown_t;
-            uv_shutdown(shutdown_req, (uv_stream_t *) &ctx->tcp_client, on_shutdown);
-            return;
+    if (ctx->pending_records.empty()) {
+        std::vector<Record> records;
+        while (true) {
+            ctx->update_prev_working_state();
+            Record rec = ctx->next_record();
+            switch (rec.record_type) {
+                case NOP_REC:
+                    continue;
+                case INSERT_REC:
+                    if (records.size() == INSERT_NUM_TUPLES) {
+                        stmt = assemble_insert_statement(ctx->task.table, records);
+                        ctx->update_prepared_state_by_cur();
+                        goto out_loop;
+                    } else {
+                        records.push_back(rec);
+                    }
+                    break;
+                case UPDATE_REC:
+                    if (records.empty()) {
+                        stmt = assemble_update_statement(ctx->task.table, rec);
+                        ctx->update_prepared_state_by_cur();
+                        goto out_loop;
+                    } else {
+                        ctx->pending_records.push_back(rec);
+                        stmt = assemble_insert_statement(ctx->task.table, records);
+                        ctx->update_prepared_state_by_prev();
+                        goto out_loop;
+                    }
+                    break;
+                case EOF_REC:
+                    if (records.empty()) {
+                        auto shutdown_req = new uv_shutdown_t;
+                        uv_shutdown(shutdown_req, (uv_stream_t *) &ctx->tcp_client, on_shutdown);
+                        return;
+                    } else {
+                        ctx->pending_records.push_back(rec);
+                        stmt = assemble_insert_statement(ctx->task.table, records);
+                        ctx->update_prepared_state_by_cur();
+                        goto out_loop;
+                    }
+            }
+        }
+        out_loop:;
+    } else {
+        auto &r = ctx->pending_records[0];
+        switch (r.record_type) {
+            case UPDATE_REC:
+                stmt = assemble_update_statement(ctx->task.table, r);
+                ctx->update_prepared_state_by_cur();
+                break;
+            case EOF_REC:
+                auto shutdown_req = new uv_shutdown_t;
+                uv_shutdown(shutdown_req, (uv_stream_t *) &ctx->tcp_client, on_shutdown);
+                return;
+        }
+        ctx->pending_records.clear();
     }
+
 
     ctx->reuse_write_buf();
     auto buf = ctx->write_buf;

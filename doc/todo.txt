@@ -1,5 +1,5 @@
 TODO
 ---------
-1. batch insert
-2. increase # of connections
-3. fix the position issue
+1. Fix the bug that the result misses some lines
+2. Use compression to improve the performance
+3. Consider multiple keys instead of a composite key

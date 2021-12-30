@@ -62,15 +62,24 @@ struct ConnContext {
     std::vector<BufferedReader *> csv_handles;
     shared::hash_map<uint64_t, time_t> *inserted;
     int working_cur_handle = 0;
-    int prepare_cur_handle = 0;
-    size_t prepare_read_offset = 0;
+    int prepare_cur_handle = 0, prev_working_cur_handle = 0;
+    size_t prepare_read_offset = 0, prev_working_read_offset = 0;
     int *stored_cur_handle;
     size_t *stored_read_offset;
     XXH64_state_t *hash_state;
 
     Record next_record();
 
+    void update_prepared_state_by_cur();
+
+    void update_prepared_state_by_prev();
+
+    void update_prev_working_state();
+
     shared::segment *shared_mgr = nullptr;
+
+    // only one record will be pending if not empty
+    std::vector<Record> pending_records;
 };
 
 class MySQLClient {
@@ -110,9 +119,9 @@ private:
 
     static void send_create_table(ConnContext *ctx);
 
-    static std::string assemble_insert_statement(const std::string& table, const Record &rec);
+    static std::string assemble_insert_statement(const std::string &table, const std::vector<Record> &rec);
 
-    static std::string assemble_update_statement(const std::string& table, const Record &rec);
+    static std::string assemble_update_statement(const std::string &table, const Record &rec);
 
     static void on_shutdown(uv_shutdown_t *req, int status);
 

@@ -98,6 +98,7 @@ DDLInfo parse_ddl(const char *ddl) {
         fmt::print("ERROR: last field is not `updated_at` !!");
         exit(-1);
     }
+    fmt::print("ddl = {}, unique_mask = {}\n", ddl, unique_mask);
     return DDLInfo{.field_names = field_names, .unique_mask=unique_mask};
 }
 
