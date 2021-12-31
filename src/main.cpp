@@ -34,6 +34,7 @@ int main(int argc, char *argv[]) {
                 if (fd != -1) {
                     close(fd);
                 }
+                fmt::print("finish {}.{}\n", task.db, task.table);
                 remove(state_file.c_str());
             }
             uv_loop_close(&loop);

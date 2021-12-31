@@ -92,7 +92,7 @@ DDLInfo parse_ddl(const char *ddl) {
     }
 
     if (unique_mask == 0) {
-        unique_mask = (1 << field_name_to_index.size()) - 1;
+        unique_mask = (1 << (field_name_to_index.size() - 1)) - 1;
     }
     if (field_names[field_names.size() - 1] != "`updated_at`") {
         fmt::print("ERROR: last field is not `updated_at` !!");
