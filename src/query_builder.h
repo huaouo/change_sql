@@ -29,7 +29,7 @@ public:
 private:
     XXH3_state_t *hash_state;
     std::vector<std::string> field_names;
-    uint16_t unique_mask, float_mask, real_mask;
+    uint16_t unique_mask, float_mask;
     std::string table;
 
     unsigned char handle_idx;

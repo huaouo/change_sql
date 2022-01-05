@@ -142,7 +142,7 @@ std::vector<TableTask> extract_table_tasks(const char *data_path) {
     return ret;
 }
 
-std::string normalize_float(const std::string &number_str) {
+std::string represent_float(const std::string &number_str) {
     std::string n = number_str;
     int digit_cnt = 0, i = 0, dot_pos = n.size();
     bool leading_zero = true;
@@ -190,6 +190,14 @@ std::string normalize_float(const std::string &number_str) {
         n = n.substr(0, dot_pos);
     }
     return carry ? std::string("1") + n : n;
+}
+
+std::string normalize_float(const std::string &number_str) {
+    auto s = fmt::format("{:.18f}", std::stof(number_str));
+    while (s.size() > 10 && s[s.size() - 1] != '.') {
+        s.pop_back();
+    }
+    return s;
 }
 
 std::vector<std::vector<TableTask>> distribute_tasks(const std::vector<TableTask> &tasks, int num_cores) {

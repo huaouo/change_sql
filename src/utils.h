@@ -49,6 +49,8 @@ DDLInfo parse_ddl(const char *ddl);
 
 std::vector<TableTask> extract_table_tasks(const char *data_path);
 
+std::string represent_float(const std::string &number_str);
+
 std::string normalize_float(const std::string &number_str);
 
 std::vector<std::vector<TableTask>> distribute_tasks(const std::vector<TableTask> &tasks, int num_cores);

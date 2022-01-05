@@ -12,11 +12,13 @@ add_subdirectory(3rd/spdlog)
 add_subdirectory(3rd/libuv)
 add_subdirectory(3rd/xxhash)
 add_subdirectory(3rd/boost.ipc)
+add_subdirectory(3rd/mysqlclient)
 add_subdirectory(3rd/flat_hash_map)
 
 add_executable(run src/main.cpp src/mysql.cpp src/utils.cpp
         src/buffered_reader.cpp src/query_builder.cpp)
-target_link_libraries(run flat_hash_map spdlog xxhash boost.ipc rt uv_a crypto)
+target_link_libraries(run flat_hash_map spdlog xxhash boost.ipc
+        rt uv_a crypto mysqlclient)
 
-#add_executable(lab lab/test.cpp)
-#target_link_libraries(lab spdlog flat_hash_map boost.ipc rt)
+add_executable(lab lab/test.cpp)
+target_link_libraries(lab spdlog flat_hash_map boost.ipc rt)

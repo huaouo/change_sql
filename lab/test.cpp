@@ -65,26 +65,15 @@
 #include <flat_hash_map.hpp>
 
 #include <iostream>
+#include <spdlog/spdlog.h>
 
-namespace ipc = boost::interprocess;
+#include <limits>
 
-namespace Shared {
-    using Segment = ipc::managed_shared_memory;
-    using Manager = Segment::segment_manager;
-    template<typename T> using Alloc = ipc::allocator<T, Manager>;
-    template<typename K, typename V, typename KH = std::hash<K>, typename KEq = std::equal_to<K>>
-    using HashMap = ska::flat_hash_map<K, V, KH, KEq, Alloc<std::pair<const K, V>>>;
-}
-
-using OBJ_MAP_TYPE = Shared::HashMap<size_t, size_t>;
+typedef std::numeric_limits< float > flt;
 
 int main() {
-//    Shared::Segment msm(ipc::open_or_create, "test", 10ul << 20);
-//
-//    Shared::Manager *mgr = msm.get_segment_manager();
-//    OBJ_MAP_TYPE &m = *msm.find_or_construct<OBJ_MAP_TYPE>("aname")(msm.get_segment_manager());
-//
-//    m.emplace(32, 12);
-//    std::cout << m[42] << std::endl;
-
+    std::cout.precision(flt::max_digits10);
+    std::cout << flt::max_digits10 << std::endl;
+    std::cout << std::stof("10.135204300235847") << std::endl;
+    std::cout << fmt::format("{:.18f}", std::stof("10.135204300235847")) << std::endl;
 }

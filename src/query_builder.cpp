@@ -9,7 +9,6 @@ QueryBuilder::QueryBuilder(const TableTask &t) {
     field_names = t.ddl_info.field_names;
     unique_mask = t.ddl_info.unique_mask;
     float_mask = t.ddl_info.float_mask;
-    real_mask = (float_mask | t.ddl_info.double_mask);
     table = t.table;
     for (auto &c: t.csvs) {
         csv_handles.push_back(new BufferedReader(c.c_str()));
@@ -105,7 +104,7 @@ std::vector<std::string> QueryBuilder::next_record() {
         v = h.get_value();
         if (((1 << i) & float_mask) != 0)
             v = normalize_float(v);
-        values.push_back(v);
+        values.push_back(std::move(v));
     }
     return values;
 }
@@ -126,11 +125,7 @@ std::string QueryBuilder::make_where_clause(const std::vector<std::string> &rec)
     for (int i = 0; i < rec.size(); i++) {
         if ((unique_mask & (1 << i)) != 0) { // not unique, need update
             where += field_names[i];
-            if ((real_mask & (1 << i)) != 0) {
-                where += " like '";
-            } else {
-                where += "='";
-            }
+            where += "='";
             where += rec[i];
             where.push_back('\'');
             where += " and";
