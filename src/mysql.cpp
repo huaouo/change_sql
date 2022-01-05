@@ -11,6 +11,11 @@ MySQLClient::Factory::Factory(const char *ip, int port, const char *username, co
         : ip(ip), port(port), username(username), password(password) {}
 
 MySQLClient *MySQLClient::Factory::create_client(uv_loop_t *loop, const TableTask &task) {
+    auto completed_file = fmt::format("/dev/shm/{}.{}.completed", task.db, task.table);
+    auto state_file = fmt::format("/dev/shm/{}.{}", task.db, task.table);
+    if (access(completed_file.c_str(), F_OK) == 0) {
+        return nullptr;
+    }
     return new MySQLClient(loop, task, ip, port, username, password);
 }
 
@@ -18,105 +23,11 @@ ConnContext::ConnContext() {
     in_buf = new char[65536];
     write_buf_base = new char[64 * 1024];
     write_buf = uv_buf_init(write_buf_base, 0);
-    hash_state = XXH64_createState();
 }
 
 ConnContext::~ConnContext() {
     delete[] in_buf;
     delete[] write_buf_base;
-    for (auto p: csv_handles) {
-        delete p;
-    }
-    XXH64_freeState(hash_state);
-    delete shared_mgr;
-}
-
-void ConnContext::init_with_task(const TableTask &t) {
-    task = t;
-    for (auto &c: t.csvs) {
-        csv_handles.push_back(new BufferedReader(c.c_str()));
-    }
-    auto mem_id = fmt::format("{}.{}", task.db, task.table);
-    shared_mgr = new shared::segment(ipc::open_or_create, mem_id.c_str(), SHARED_MGR_SIZE);
-    inserted = shared_mgr->find_or_construct<shared::hash_map<uint64_t, time_t>>
-            ("inserted")(shared_mgr->get_segment_manager());
-    inserted->reserve(INSERTED_TABLE_RESERVED_SIZE);
-    stored_cur_handle = shared_mgr->find<int>("cur_handle").first;
-    if (stored_cur_handle == nullptr) {
-        stored_cur_handle = shared_mgr->construct<int>("cur_handle")();
-        *stored_cur_handle = 0;
-    }
-    working_cur_handle = *stored_cur_handle;
-    stored_read_offset = shared_mgr->find<size_t>("read_offset").first;
-    if (stored_read_offset == nullptr) {
-        stored_read_offset = shared_mgr->construct<size_t>("read_offset")();
-        *stored_read_offset = 0;
-    }
-    csv_handles[working_cur_handle]->seek(*stored_read_offset);
-}
-
-void ConnContext::reuse_write_buf() {
-    write_buf.len = 0;
-}
-
-Record ConnContext::next_record() {
-    RecordType type = INSERT_REC;
-    std::vector<std::string> values;
-    size_t num_fields = task.ddl_info.field_names.size();
-    values.reserve(num_fields);
-
-    if (csv_handles[working_cur_handle]->peek() == EOF) {
-        working_cur_handle++;
-        if (working_cur_handle == csv_handles.size()) {
-            working_cur_handle--;
-            return Record{.values=std::move(values), .field_names=&task.ddl_info.field_names,
-                    .record_type=EOF_REC, .unique_mask=0};
-        }
-    }
-
-    auto &h = *csv_handles[working_cur_handle];
-    const auto unique_mask = task.ddl_info.unique_mask;
-    XXH64_reset(hash_state, 0);
-    std::string v;
-    for (int i = 0; i < num_fields; i++) {
-        v = h.get_value_unsafe();
-        if (((1 << i) & unique_mask) != 0)
-            XXH64_update(hash_state, v.c_str(), v.size());
-        values.push_back(v);
-    }
-    uint64_t hash = XXH64_digest(hash_state);
-    auto it = inserted->find(hash);
-    if (it == inserted->end()) {
-        inserted->insert(std::make_pair(hash, serialize_datetime(v.c_str())));
-    } else {
-        auto prev_time = it->second;
-        auto cur_time = serialize_datetime(v.c_str());
-        if (cur_time > prev_time) {
-            type = UPDATE_REC;
-            (*inserted)[hash] = cur_time;
-        } else {
-            values.clear();
-            type = NOP_REC;
-        }
-    }
-
-    return Record{.values=std::move(values), .field_names=&task.ddl_info.field_names,
-            .record_type=type, .unique_mask=unique_mask};
-}
-
-void ConnContext::update_prepared_state_by_cur() {
-    prepare_cur_handle = working_cur_handle;
-    prepare_read_offset = csv_handles[working_cur_handle]->offset();
-}
-
-void ConnContext::update_prepared_state_by_prev() {
-    prepare_cur_handle = prev_working_cur_handle;
-    prepare_read_offset = prev_working_read_offset;
-}
-
-void ConnContext::update_prev_working_state() {
-    prev_working_cur_handle = working_cur_handle;
-    prev_working_read_offset = csv_handles[working_cur_handle]->offset();
 }
 
 MySQLClient::MySQLClient(uv_loop_t *loop, const TableTask &task,
@@ -124,7 +35,10 @@ MySQLClient::MySQLClient(uv_loop_t *loop, const TableTask &task,
     uv_tcp_init(loop, &ctx.tcp_client);
     strncpy(ctx.username, username, sizeof(ConnContext::username) - 1);
     strncpy(ctx.password, password, sizeof(ConnContext::password) - 1);
-    ctx.init_with_task(task);
+    ctx.builder = new QueryBuilder(task);
+    ctx.db = task.db;
+    ctx.table = task.table;
+    ctx.table_ddl = task.table_ddl;
     connect(ip, port);
 }
 
@@ -174,11 +88,8 @@ void MySQLClient::handle_in_packet(ConnContext *ctx) {
             fmt::print("\n");
             fflush(stdout);
             exit(-1);
-            break;
         case 0x00:
         case 0xfe: // OK_Packet
-//            fmt::print("OK received\n");
-//            fflush(stdout);
             switch (ctx->state) {
                 case PRE_CREATE_DATABASE:
                     send_create_database(ctx);
@@ -235,7 +146,7 @@ void MySQLClient::send_handshake_resp(ConnContext *ctx, char *challenge) {
     }
 
     // buf := auth_block_1 <concat> username <concat> auth_block_2 <concat> sha_password <concat> auth_block_3
-    ctx->reuse_write_buf();
+    ctx->write_buf.len = 0;
     auto buf = ctx->write_buf;
     memcpy(buf.base + buf.len, auth_block_1, sizeof(auth_block_1));
     buf.len += sizeof(auth_block_1);
@@ -257,205 +168,65 @@ void MySQLClient::send_handshake_resp(ConnContext *ctx, char *challenge) {
 
 void MySQLClient::on_write_completed(uv_write_t *req, int status) {
     auto ctx = reinterpret_cast<ConnContext *>(req->handle->data);
-    // TODO: The following two lines must be executed once the server
-    //  has received our request completely, but how to ensure this?
-    //  Aslo, any error shouldn't occur for the insert request.
-    *(ctx->stored_cur_handle) = ctx->prepare_cur_handle;
-    *(ctx->stored_read_offset) = ctx->prepare_read_offset;
+    ctx->builder->commit();
+}
+
+void MySQLClient::send_request(ConnContext *ctx, char type, const char *data, size_t len_data) {
+    ctx->write_buf.len = 0;
+    auto buf = ctx->write_buf;
+
+    memcpy(buf.base + buf.len, empty_header, sizeof(empty_header));
+    buf.len += sizeof(empty_header);
+    *(buf.base + buf.len) = type;
+    buf.len += 1;
+    memcpy(buf.base + buf.len, data, len_data);
+    buf.len += len_data;
+
+    size_t header_len = buf.len - 4;
+    memcpy(buf.base, &header_len, 3);
+
+    uv_write(&ctx->write_req, reinterpret_cast<uv_stream_t *>(&ctx->tcp_client),
+             &buf, 1, on_write_completed);
 }
 
 void MySQLClient::send_create_database(ConnContext *ctx) {
-    ctx->reuse_write_buf();
-    auto buf = ctx->write_buf;
-
-    memcpy(buf.base + buf.len, empty_header, sizeof(empty_header));
-    buf.len += sizeof(empty_header);
-    *(buf.base + buf.len) = 0x03; // COM_QUERY
-    buf.len += 1;
-    const char *create_db_str = "create database if not exists ";
-    size_t len_create_db_str = strlen(create_db_str);
-    memcpy(buf.base + buf.len, create_db_str, len_create_db_str);
-    buf.len += len_create_db_str;
-    memcpy(buf.base + buf.len, ctx->task.db.c_str(), ctx->task.db.size());
-    buf.len += ctx->task.db.size();
-
-    size_t header_len = buf.len - 4;
-    memcpy(buf.base, &header_len, 3);
-
-    uv_write(&ctx->write_req, reinterpret_cast<uv_stream_t *>(&ctx->tcp_client),
-             &buf, 1, on_write_completed);
+    auto query = std::string("create database if not exists ") + ctx->db;
+    send_request(ctx, 0x03, query.c_str(), query.size());
 }
 
 void MySQLClient::send_switch_database(ConnContext *ctx) {
-    ctx->reuse_write_buf();
-    auto buf = ctx->write_buf;
-
-    memcpy(buf.base + buf.len, empty_header, sizeof(empty_header));
-    buf.len += sizeof(empty_header);
-    *(buf.base + buf.len) = 0x02; // COM_INIT_DB
-    buf.len += 1;
-    memcpy(buf.base + buf.len, ctx->task.db.c_str(), ctx->task.db.size());
-    buf.len += ctx->task.db.size();
-
-    size_t header_len = buf.len - 4;
-    memcpy(buf.base, &header_len, 3);
-
-    uv_write(&ctx->write_req, reinterpret_cast<uv_stream_t *>(&ctx->tcp_client),
-             &buf, 1, on_write_completed);
+    send_request(ctx, 0x02 /* COM_INIT_DB */, ctx->db.c_str(), ctx->db.size());
 }
 
 void MySQLClient::send_create_table(ConnContext *ctx) {
-    ctx->reuse_write_buf();
-    auto buf = ctx->write_buf;
-
-    memcpy(buf.base + buf.len, empty_header, sizeof(empty_header));
-    buf.len += sizeof(empty_header);
-    *(buf.base + buf.len) = 0x03; // COM_QUERY
-    buf.len += 1;
-    memcpy(buf.base + buf.len, ctx->task.table_ddl.c_str(), ctx->task.table_ddl.size());
-    buf.len += ctx->task.table_ddl.size();
-
-    size_t header_len = buf.len - 4;
-    memcpy(buf.base, &header_len, 3);
-
-    uv_write(&ctx->write_req, reinterpret_cast<uv_stream_t *>(&ctx->tcp_client),
-             &buf, 1, on_write_completed);
-}
-
-std::string MySQLClient::assemble_insert_statement(const std::string &table, const std::vector<Record> &records) {
-    std::string ret;
-    ret += "insert into `";
-    ret += table;
-    ret += "` values";
-    for (auto &rec: records) {
-        ret.push_back('(');
-        for (int i = 0; i < rec.values.size(); i++) {
-            ret.push_back('\'');
-            ret += rec.values[i];
-            ret.push_back('\'');
-            if (i != rec.values.size() - 1) {
-                ret.push_back(',');
-            }
-        }
-        ret += "),";
-    }
-    ret.pop_back();
-//    fmt::print("{}\n", ret);
-    return ret;
-}
-
-std::string MySQLClient::assemble_update_statement(const std::string &table, const Record &rec) {
-    std::string ret, where;
-    ret.reserve(256);
-    where.reserve(128);
-    ret += "update `";
-    ret += table;
-    ret += "` set ";
-    where += " where ";
-    for (int i = 0; i < rec.values.size(); i++) {
-        if ((rec.unique_mask & (1 << i)) == 0) { // not unique, need update
-            ret += (*rec.field_names)[i];
-            ret += "='";
-            ret += rec.values[i];
-            ret += "',";
-        } else { // unique, in the where clause
-            where += (*rec.field_names)[i];
-            where += "='";
-            where += rec.values[i];
-            where += "' and";
-        }
-    }
-    ret.pop_back();
-    where.pop_back();
-    where.pop_back();
-    where.pop_back();
-    where.pop_back();
-    ret += where;
-    fmt::print("{}\n", ret);
-    return ret;
+    send_request(ctx, 0x03 /* COM_QUERY */, ctx->table_ddl.c_str(), ctx->table_ddl.size());
 }
 
 void MySQLClient::on_shutdown(uv_shutdown_t *req, int status) {
+    auto db_table = reinterpret_cast<std::string *>(req->data);
     uv_close((uv_handle_t *) req->handle, NULL);
     delete req;
+
+    auto completed_file = fmt::format("/dev/shm/{}.completed", *db_table);
+    auto state_file = fmt::format("/dev/shm/{}", *db_table);
+    int fd = open(completed_file.c_str(), O_RDWR | O_CREAT, 0644);
+    if (fd != -1) {
+        close(fd);
+    }
+    spdlog::info("finish {}", *db_table);
+    remove(state_file.c_str());
+    delete db_table;
 }
 
 void MySQLClient::send_insert(ConnContext *ctx) {
-    std::string stmt;
-    if (ctx->pending_records.empty()) {
-        std::vector<Record> records;
-        while (true) {
-            ctx->update_prev_working_state();
-            Record rec = ctx->next_record();
-            switch (rec.record_type) {
-                case NOP_REC:
-                    continue;
-                case INSERT_REC:
-                    if (records.size() == INSERT_NUM_TUPLES) {
-                        stmt = assemble_insert_statement(ctx->task.table, records);
-                        ctx->update_prepared_state_by_cur();
-                        goto out_loop;
-                    } else {
-                        records.push_back(rec);
-                    }
-                    break;
-                case UPDATE_REC:
-                    if (records.empty()) {
-                        stmt = assemble_update_statement(ctx->task.table, rec);
-                        ctx->update_prepared_state_by_cur();
-                        goto out_loop;
-                    } else {
-                        ctx->pending_records.push_back(rec);
-                        stmt = assemble_insert_statement(ctx->task.table, records);
-                        ctx->update_prepared_state_by_prev();
-                        goto out_loop;
-                    }
-                    break;
-                case EOF_REC:
-                    if (records.empty()) {
-                        auto shutdown_req = new uv_shutdown_t;
-                        uv_shutdown(shutdown_req, (uv_stream_t *) &ctx->tcp_client, on_shutdown);
-                        return;
-                    } else {
-                        ctx->pending_records.push_back(rec);
-                        stmt = assemble_insert_statement(ctx->task.table, records);
-                        ctx->update_prepared_state_by_cur();
-                        goto out_loop;
-                    }
-            }
-        }
-        out_loop:;
+    auto stmt = ctx->builder->next_query();
+    if (!stmt.empty()) {
+        send_request(ctx, 0x03 /* COM_QUERY */, stmt.c_str(), stmt.size());
     } else {
-        auto &r = ctx->pending_records[0];
-        switch (r.record_type) {
-            case UPDATE_REC:
-                stmt = assemble_update_statement(ctx->task.table, r);
-                ctx->update_prepared_state_by_cur();
-                break;
-            case EOF_REC:
-                auto shutdown_req = new uv_shutdown_t;
-                uv_shutdown(shutdown_req, (uv_stream_t *) &ctx->tcp_client, on_shutdown);
-                return;
-        }
-        ctx->pending_records.clear();
+        auto shutdown_req = new uv_shutdown_t;
+        shutdown_req->data = new std::string(ctx->db + "." + ctx->table);
+        uv_shutdown(shutdown_req, (uv_stream_t *) &ctx->tcp_client, on_shutdown);
     }
-
-
-    ctx->reuse_write_buf();
-    auto buf = ctx->write_buf;
-
-    memcpy(buf.base + buf.len, empty_header, sizeof(empty_header));
-    buf.len += sizeof(empty_header);
-    *(buf.base + buf.len) = 0x03; // COM_QUERY
-    buf.len += 1;
-    memcpy(buf.base + buf.len, stmt.c_str(), stmt.size());
-    buf.len += stmt.size();
-
-    size_t header_len = buf.len - 4;
-    memcpy(buf.base, &header_len, 3);
-
-    uv_write(&ctx->write_req, reinterpret_cast<uv_stream_t *>(&ctx->tcp_client),
-             &buf, 1, on_write_completed);
 }
 
 unsigned char MySQLClient::empty_header[4] = {0x00, 0x00, 0x00, 0x00};

@@ -14,6 +14,7 @@
 
 #include "config.h"
 #include "utils.h"
+#include "query_builder.h"
 
 enum ConnState {
     PRE_CREATE_DATABASE = 0,
@@ -23,20 +24,6 @@ enum ConnState {
     INSERT
 };
 
-enum RecordType {
-    NOP_REC = 0,
-    INSERT_REC,
-    UPDATE_REC,
-    EOF_REC
-};
-
-struct Record {
-    std::vector<std::string> values;
-    const std::vector<std::string> *field_names;
-    RecordType record_type;
-    uint16_t unique_mask;
-};
-
 struct ConnContext {
     char username[33]{};
     char password[17]{};
@@ -44,42 +31,19 @@ struct ConnContext {
     size_t in_idx = 0;
 
     uv_tcp_t tcp_client{};
-    TableTask task;
+//    TableTask task;
+    std::string db, table, table_ddl;
     ConnState state = PRE_CREATE_DATABASE;
 
     char *write_buf_base;
     uv_write_t write_req;
     uv_buf_t write_buf;
 
+    QueryBuilder *builder;
+
     ConnContext();
 
     ~ConnContext();
-
-    void init_with_task(const TableTask &t);
-
-    void reuse_write_buf();
-
-    std::vector<BufferedReader *> csv_handles;
-    shared::hash_map<uint64_t, time_t> *inserted;
-    int working_cur_handle = 0;
-    int prepare_cur_handle = 0, prev_working_cur_handle = 0;
-    size_t prepare_read_offset = 0, prev_working_read_offset = 0;
-    int *stored_cur_handle;
-    size_t *stored_read_offset;
-    XXH64_state_t *hash_state;
-
-    Record next_record();
-
-    void update_prepared_state_by_cur();
-
-    void update_prepared_state_by_prev();
-
-    void update_prev_working_state();
-
-    shared::segment *shared_mgr = nullptr;
-
-    // only one record will be pending if not empty
-    std::vector<Record> pending_records;
 };
 
 class MySQLClient {
@@ -113,15 +77,13 @@ private:
 
     static void on_write_completed(uv_write_t *req, int status);
 
+    static void send_request(ConnContext *ctx, char type, const char *data, size_t len_data);
+
     static void send_create_database(ConnContext *ctx);
 
     static void send_switch_database(ConnContext *ctx);
 
     static void send_create_table(ConnContext *ctx);
-
-    static std::string assemble_insert_statement(const std::string &table, const std::vector<Record> &rec);
-
-    static std::string assemble_update_statement(const std::string &table, const Record &rec);
 
     static void on_shutdown(uv_shutdown_t *req, int status);
 

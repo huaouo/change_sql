@@ -67,11 +67,15 @@ DDLInfo parse_ddl(const char *ddl) {
     std::vector<std::string> field_names;
     ska::flat_hash_map<std::string, int> field_name_to_index;
     int index = 0;
-    uint16_t unique_mask = 0;
+    uint16_t unique_mask = 0, float_mask = 0, double_mask = 0;
     while (true) {
         auto field_name = next_token();
         if (field_name[0] == '`') { // field definition line
             auto field_type = next_token(); // not used for now
+            std::transform(field_type.begin(), field_type.end(), field_type.begin(),
+                           [](unsigned char c) { return std::tolower(c); });
+            float_mask |= static_cast<int>(field_type == "float") << index;
+            double_mask |= static_cast<int>(field_type == "double") << index;
             field_name_to_index[field_name] = index;
             field_names.push_back(field_name);
             index++;
@@ -99,7 +103,8 @@ DDLInfo parse_ddl(const char *ddl) {
         exit(-1);
     }
     fmt::print("ddl = {}, unique_mask = {}\n", ddl, unique_mask);
-    return DDLInfo{.field_names = field_names, .unique_mask=unique_mask};
+    return DDLInfo{.field_names = field_names, .unique_mask=unique_mask,
+            .float_mask=float_mask, .double_mask=double_mask};
 }
 
 std::vector<TableTask> extract_table_tasks(const char *data_path) {
@@ -200,54 +205,6 @@ void set_thread_affinity(int i) {
     CPU_ZERO(&cpuset);
     CPU_SET(i, &cpuset);
     pthread_setaffinity_np(pthread_self(), sizeof(cpu_set_t), &cpuset);
-}
-
-BufferedReader::BufferedReader(const char *path) {
-    f = fopen(path, "rb");
-    buf = new char[BUF_SIZE];
-}
-
-BufferedReader::~BufferedReader() {
-    fclose(f);
-    delete[] buf;
-}
-
-char BufferedReader::peek() {
-    if (read_idx == buf_end) {
-        if (buf_end == BUF_SIZE) {
-            buf_end = fread(buf, 1, BUF_SIZE, f);
-            read_idx = 0;
-            if (buf_end == 0) return EOF;
-        } else {
-            return EOF;
-        }
-    }
-    return buf[read_idx];
-}
-
-void BufferedReader::seek(size_t offset) {
-    fseek(f, offset, SEEK_SET);
-    offset_ = offset;
-}
-
-size_t BufferedReader::offset() const {
-    return offset_;
-}
-
-std::string BufferedReader::get_value_unsafe() {
-    std::string ret;
-    ret.reserve(48);
-
-    while (true) {
-        if (read_idx == buf_end) {
-            peek();
-        }
-        char c = buf[read_idx++];
-        offset_++;
-        if (c == ',' || c == '\n') break;
-        ret.push_back(c);
-    }
-    return ret;
 }
 
 time_t serialize_datetime(const char *input_str) {
