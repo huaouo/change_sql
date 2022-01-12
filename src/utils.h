@@ -19,8 +19,6 @@
 #include <boost/interprocess/allocators/allocator.hpp>
 #include <boost/interprocess/managed_shared_memory.hpp>
 
-//#include "query_builder.h"
-
 struct Config {
     const char *data_path, *dst_ip, *dst_user, *dst_password;
     int dst_port;

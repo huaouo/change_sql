@@ -9,16 +9,16 @@ set(CMAKE_CXX_FLAGS_RELEASE "-O3")
 set_property(GLOBAL PROPERTY CTEST_TARGETS_ADDED 1)
 
 add_subdirectory(3rd/spdlog)
-add_subdirectory(3rd/libuv)
+#add_subdirectory(3rd/libuv)
 add_subdirectory(3rd/xxhash)
 add_subdirectory(3rd/boost.ipc)
-add_subdirectory(3rd/mysqlclient)
+#add_subdirectory(3rd/mysqlclient)
 add_subdirectory(3rd/flat_hash_map)
 
-add_executable(run src/main.cpp src/mysql.cpp src/utils.cpp
-        src/buffered_reader.cpp src/query_builder.cpp)
+include_directories(/usr/include)
+add_executable(run src/main.cpp src/utils.cpp src/buffered_reader.cpp src/query_builder.cpp)
 target_link_libraries(run flat_hash_map spdlog xxhash boost.ipc
-        rt uv_a crypto mysqlclient)
+        rt crypto /usr/lib64/mysql/libmysqlclient.so)
 
 add_executable(lab lab/test.cpp)
 target_link_libraries(lab spdlog flat_hash_map boost.ipc rt)
